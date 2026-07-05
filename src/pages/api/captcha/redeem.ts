@@ -45,8 +45,11 @@ export const POST: APIRoute = async ({ request }) => {
   }
 
   // Captcha superado → sesión + cookie.
+  // Cookie SIN `Secure`: la app se sirve por http:// (sslip.io sin TLS) y los
+  // navegadores descartan cookies Secure sobre HTTP. Si algún día se sirve por
+  // HTTPS, se puede volver a poner `import.meta.env.PROD`.
   const id = await createSession();
-  const cookie = sessionCookie(id, import.meta.env.PROD);
+  const cookie = sessionCookie(id, false);
 
   return new Response(JSON.stringify(data), {
     status: 200,
