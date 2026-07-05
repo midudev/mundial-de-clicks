@@ -1,5 +1,6 @@
 import type { APIRoute } from 'astro';
 import { getWorldState } from '../../lib/world-state';
+import { config } from '../../lib/config';
 
 export const prerender = false;
 
@@ -17,6 +18,15 @@ export const prerender = false;
  */
 export const GET: APIRoute = ({ request }) => {
   const world = getWorldState();
+
+  // Defensa básica: si ya hay demasiadas conexiones abiertas, rechazamos
+  // las nuevas en vez de tragar sockets/memoria sin límite.
+  if (world.connections >= config.stream.maxConnections) {
+    return new Response('Too many connections', {
+      status: 503,
+      headers: { 'retry-after': '5' },
+    });
+  }
 
   const stream = new ReadableStream({
     start(controller) {

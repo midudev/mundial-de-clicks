@@ -5,7 +5,7 @@
 # Levanta:
 #   - DragonFly  → base de datos en memoria (protocolo Redis) para los votos
 #   - Postgres   → almacén que necesita Umami
-#   - Umami      → analytics self-hosted (opcional)
+#   - Umami      → analytics self-hosted
 #
 # La app Astro se ejecuta aparte con `pnpm dev`. En Coolify cada servicio
 # se crea por separado y se conectan mediante variables de entorno.

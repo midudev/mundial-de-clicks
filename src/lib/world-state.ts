@@ -28,6 +28,9 @@ const MAX_EVENTS = 12;
 /** Hitos de votos totales que disparan un evento de celebración. */
 const MILESTONES = [1_000, 10_000, 50_000, 100_000, 500_000, 1_000_000];
 
+/** Cada cuánto mandar un ping si no ha cambiado nada (mantener conexión). */
+const HEARTBEAT_MS = 20_000;
+
 /** Función que recibe los bytes ya codificados de un snapshot SSE. */
 type Subscriber = (payload: Uint8Array) => void;
 
@@ -40,9 +43,15 @@ class WorldState {
     events: [],
   };
 
-  /** Último snapshot ya serializado a bytes (formato `data: ...\n\n`). */
+  /** Último snapshot de DATOS ya serializado a bytes (`data: ...\n\n`). */
   private payload: Uint8Array | null = null;
+  /** JSON del último snapshot enviado, para no reenviar si no cambió. */
+  private lastJson = '';
+  /** Epoch (ms) del último envío (dato o heartbeat). */
+  private lastSentAt = 0;
   private readonly encoder = new TextEncoder();
+  /** Comentario keep-alive para conexiones ociosas. */
+  private readonly pingPayload = new TextEncoder().encode(': ping\n\n');
 
   /** Conexiones SSE suscritas. */
   private readonly subscribers = new Set<Subscriber>();
@@ -102,11 +111,22 @@ class WorldState {
         events: this.events.slice(0, MAX_EVENTS),
       };
 
-      // Serializa UNA vez y difunde los mismos bytes a todos.
-      this.payload = this.encoder.encode(
-        `data: ${JSON.stringify(this.snapshot)}\n\n`,
-      );
-      this.broadcast();
+      const json = JSON.stringify(this.snapshot);
+      const now = Date.now();
+
+      if (json !== this.lastJson) {
+        // Cambió algo: serializa UNA vez y difunde los mismos bytes a todos.
+        this.lastJson = json;
+        this.payload = this.encoder.encode(`data: ${json}\n\n`);
+        this.lastSentAt = now;
+        this.broadcast(this.payload);
+      } else if (now - this.lastSentAt >= HEARTBEAT_MS) {
+        // Nada nuevo: en vez de reenviar el mismo snapshot a miles de
+        // espectadores (ancho de banda tirado), solo mandamos un ping
+        // para mantener viva la conexión.
+        this.lastSentAt = now;
+        this.broadcast(this.pingPayload);
+      }
     } catch (err) {
       console.error('[world] poll error:', (err as Error).message);
     } finally {
@@ -114,12 +134,11 @@ class WorldState {
     }
   }
 
-  /** Envía el payload actual a todas las conexiones suscritas. */
-  private broadcast(): void {
-    if (!this.payload) return;
+  /** Envía un payload a todas las conexiones suscritas. */
+  private broadcast(payload: Uint8Array): void {
     for (const fn of this.subscribers) {
       try {
-        fn(this.payload);
+        fn(payload);
       } catch {
         // Una conexión rota no debe tumbar el resto: se limpiará sola
         // cuando su stream aborte.

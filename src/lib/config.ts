@@ -33,10 +33,22 @@ export const config = {
     maxPerWindow: envInt('RATE_LIMIT_MAX', 15),
     /** Duración de la ventana en segundos. */
     windowSeconds: envInt('RATE_LIMIT_WINDOW', 1),
+    /**
+     * Número de proxies de confianza entre el cliente y la app. Se usa
+     * para leer la IP REAL de `x-forwarded-for` sin que el cliente la
+     * pueda falsear. En Coolify hay 1 (Traefik). Si pones un CDN/WAF
+     * delante (p.ej. Cloudflare), serían 2.
+     */
+    trustedProxyHops: envInt('TRUSTED_PROXY_HOPS', 1),
   },
   stream: {
     /** Intervalo en ms entre snapshots enviados por SSE. */
     intervalMs: envInt('STREAM_INTERVAL_MS', 1000),
+    /**
+     * Tope de conexiones SSE simultáneas (defensa básica contra que te
+     * agoten sockets/memoria abriendo miles de streams).
+     */
+    maxConnections: envInt('MAX_SSE_CONNECTIONS', 20000),
   },
 } as const;
 

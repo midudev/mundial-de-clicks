@@ -5,13 +5,24 @@ import LiveStats from '../components/LiveStats.astro';
 import VotingGrid from '../components/VotingGrid.astro';
 import Ranking from '../components/Ranking.astro';
 import LiveEvents from '../components/LiveEvents.astro';
-import { getWorldState } from '../lib/world-state';
+import { buildRanking } from '../lib/ranking';
+import type { WorldSnapshot } from '../lib/types';
 
-export const prerender = false;
+// Página ESTÁTICA (prerender): se genera una vez en el build y se sirve
+// como un HTML fijo, con coste de CPU casi nulo y cacheable en CDN. Bajo
+// una avalancha de cargas, esto es lo que más ayuda a que no se caiga.
+// Los datos reales (votos, ranking) los rellena el cliente por SSE nada
+// más cargar, así que no necesitamos renderizar el estado en el servidor.
+export const prerender = true;
 
-// Renderizamos con el snapshot actual para que la primera carga ya
-// muestre datos reales (SSR). El cliente luego lo mantiene vivo por SSE.
-const snapshot = getWorldState().getSnapshot();
+// Estado inicial vacío (todos a 0). El cliente lo sustituye al instante.
+const snapshot: WorldSnapshot = {
+  ranking: buildRanking(new Map()),
+  totalVotes: 0,
+  clicksPerSecond: 0,
+  blockedClicks: 0,
+  events: [],
+};
 ---
 
 <Layout>

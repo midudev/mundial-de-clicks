@@ -31,10 +31,18 @@ import { startChallenge, challengeActive } from './challenge';
 // se ve al instante), esta espera no se nota.
 const FLUSH_MS = 400; // duración de la ventana de agrupado
 const COMBO_WINDOW_MS = 700; // ventana para encadenar combo
-const CHALLENGE_EVERY = 30; // votos entre reto y reto
+
+// Retos: en vez de un número fijo, un intervalo ALEATORIO de votos entre
+// reto y reto. Así salen más espaciados y de forma menos predecible (más
+// "de vez en cuando" y no como un reloj cada X clicks).
+const CHALLENGE_MIN = 60;
+const CHALLENGE_MAX = 110;
+const nextChallengeAt = () =>
+  CHALLENGE_MIN + Math.floor(Math.random() * (CHALLENGE_MAX - CHALLENGE_MIN + 1));
 
 // --- Estado de los retos ---------------------------------------------
 let votesSinceChallenge = 0;
+let challengeThreshold = nextChallengeAt();
 
 // --- Estado del lote pendiente de envío ------------------------------
 const pending = new Map<string, number>();
@@ -109,10 +117,11 @@ function handleVote(button: HTMLElement, code: string, x: number, y: number): vo
   // 2. Encolar para envío en lote.
   queueVote(code);
 
-  // 3. ¿Toca reto? Cada CHALLENGE_EVERY votos hay que resolver uno.
+  // 3. ¿Toca reto? Cada cierto número (aleatorio) de votos, uno.
   votesSinceChallenge += 1;
-  if (votesSinceChallenge >= CHALLENGE_EVERY) {
+  if (votesSinceChallenge >= challengeThreshold) {
     votesSinceChallenge = 0;
+    challengeThreshold = nextChallengeAt(); // recalcula el próximo umbral
     void flush(); // manda lo pendiente antes de bloquear
     startChallenge(() => {
       /* al resolver, simplemente se puede seguir votando */
