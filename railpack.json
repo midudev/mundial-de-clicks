@@ -1,6 +1,7 @@
 {
   "$schema": "https://schema.railpack.com",
   "deploy": {
+    "aptPackages": ["libatomic1"],
     "startCommand": "node dist/server/entry.mjs"
   }
 }
