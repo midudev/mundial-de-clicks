@@ -1,23 +1,47 @@
-<!doctype html>
-<html lang="en">
-	<head>
-		<meta charset="utf-8" />
-		<meta name="viewport" content="width=device-width" />
-		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-		<link rel="icon" href="/favicon.ico" />
-		<meta name="generator" content={Astro.generator} />
-		<title>Astro Basics</title>
-	</head>
-	<body>
-		<slot />
-	</body>
-</html>
+---
+import '../styles/global.css';
+import FlagSprite from '../components/FlagSprite.astro';
 
-<style>
-	html,
-	body {
-		margin: 0;
-		width: 100%;
-		height: 100%;
-	}
-</style>
+interface Props {
+  title?: string;
+  description?: string;
+}
+
+const {
+  title = 'Mundial de Clicks',
+  description = 'Apoya a tu selección haciendo clicks. Ranking en tiempo real.',
+} = Astro.props;
+
+// Analytics con Umami (opcional): se activa solo si defines las variables.
+const umamiSrc = import.meta.env.PUBLIC_UMAMI_SCRIPT_URL;
+const umamiWebsiteId = import.meta.env.PUBLIC_UMAMI_WEBSITE_ID;
+---
+
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="generator" content={Astro.generator} />
+    <meta name="description" content={description} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <title>{title}</title>
+    {
+      umamiSrc && umamiWebsiteId && (
+        <script
+          defer
+          is:inline
+          src={umamiSrc}
+          data-website-id={umamiWebsiteId}
+        />
+      )
+    }
+  </head>
+  <body>
+    <FlagSprite />
+    <slot />
+  </body>
+</html>

@@ -1,0 +1,15 @@
+---
+/**
+ * Panel lateral con la retransmisión en directo (adelantamientos, hitos).
+ * El cliente inserta nuevos <li> con data-events vía SSE.
+ */
+---
+
+<aside class="live-panel">
+  <h2 class="font-pixel text-base mb-4 flex items-center gap-2">
+    <span class="live-dot" aria-hidden="true"></span> EN DIRECTO
+  </h2>
+  <ul id="events-list" class="live-panel__list">
+    <li class="event event--empty" data-empty>Esperando el primer voto…</li>
+  </ul>
+</aside>

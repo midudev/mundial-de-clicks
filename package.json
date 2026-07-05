@@ -9,9 +9,24 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
+    "start": "node ./dist/server/entry.mjs",
+    "check": "astro check",
     "astro": "astro"
   },
   "dependencies": {
-    "astro": "^7.0.6"
+    "@astrojs/node": "^11.0.2",
+    "@tailwindcss/vite": "^4.3.2",
+    "astro": "^7.0.6",
+    "flag-icons": "^7.5.0",
+    "geist": "^1.7.2",
+    "redis": "^4.7.1",
+    "tailwind-animations": "^1.0.1",
+    "tailwindcss": "^4.3.2"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.9",
+    "@types/node": "^26.1.0",
+    "svgo": "^4.0.1",
+    "typescript": "^6.0.3"
   }
 }

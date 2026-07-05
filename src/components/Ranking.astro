@@ -1,0 +1,76 @@
+---
+import type { WorldSnapshot } from '../lib/types';
+import { formatCompact } from '../lib/format';
+import Flag from './Flag.astro';
+
+/**
+ * Ranking en vivo con barras relativas al líder. El cliente reordena y
+ * actualiza (posición, barra, total) desde el estado optimista.
+ */
+interface Props {
+  snapshot: WorldSnapshot;
+}
+const { snapshot } = Astro.props;
+
+const maxVotes = Math.max(1, ...snapshot.ranking.map((r) => r.votes));
+
+function badge(position: number): string {
+  if (position === 1) return '👑';
+  if (position === 2) return '🥈';
+  if (position === 3) return '🥉';
+  return `#${position}`;
+}
+---
+
+<section class="w-full">
+  <h2 class="font-pixel text-lg sm:text-xl mb-4 flex items-center gap-2">
+    <svg
+      class="text-neon"
+      width="22"
+      height="22"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 13a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v6a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1l0 -6" />
+      <path d="M9 9a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v10a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1l0 -10" />
+      <path d="M15 5a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v14a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1l0 -14" />
+      <path d="M4 20h14" />
+    </svg>
+    RANKING
+  </h2>
+
+  <ol id="ranking-list" class="flex flex-col gap-1.5">
+    {
+      snapshot.ranking.map((entry) => (
+        <li
+          data-row={entry.code}
+          class:list={['rank-row', { 'is-leader': entry.position === 1 && entry.votes > 0 }]}
+          style={`order: ${entry.position}`}
+        >
+          <span class="rank-row__pos font-pixel tabular" data-pos>
+            {badge(entry.position)}
+          </span>
+          <Flag code={entry.code} name={entry.name} class="rank-row__flag" />
+          <div class="min-w-0 flex-1">
+            <span class="rank-row__name">{entry.name}</span>
+            <div class="rank-row__track">
+              <div
+                class="rank-row__bar"
+                data-bar
+                style={`width: ${(entry.votes / maxVotes) * 100}%`}
+              />
+            </div>
+          </div>
+          <span class="rank-row__count font-pixel tabular" data-count>
+            {formatCompact(entry.votes)}
+          </span>
+        </li>
+      ))
+    }
+  </ol>
+</section>

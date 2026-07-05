@@ -1,0 +1,22 @@
+---
+/**
+ * Bandera del sprite SVG inyectado en el HTML (ver FlagSprite.astro).
+ * Se referencia con <use href="#flag-{code}"> → cero peticiones extra.
+ */
+interface Props {
+  code: string;
+  name: string;
+  class?: string;
+}
+const { code, name, class: className = '' } = Astro.props;
+---
+
+<svg
+  class={`flag ${className}`}
+  width="36"
+  height="27"
+  role="img"
+  aria-label={`Bandera de ${name}`}
+>
+  <use href={`#flag-${code}`} />
+</svg>

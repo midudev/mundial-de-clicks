@@ -1,11 +1,39 @@
 ---
-import Welcome from '../components/Welcome.astro';
 import Layout from '../layouts/Layout.astro';
+import Hero from '../components/Hero.astro';
+import LiveStats from '../components/LiveStats.astro';
+import VotingGrid from '../components/VotingGrid.astro';
+import Ranking from '../components/Ranking.astro';
+import LiveEvents from '../components/LiveEvents.astro';
+import { getWorldState } from '../lib/world-state';
 
-// Welcome to Astro! Wondering what to do next? Check out the Astro documentation at https://docs.astro.build
-// Don't want to use any of this? Delete everything in this file, the `assets`, `components`, and `layouts` directories, and start fresh.
+export const prerender = false;
+
+// Renderizamos con el snapshot actual para que la primera carga ya
+// muestre datos reales (SSR). El cliente luego lo mantiene vivo por SSE.
+const snapshot = getWorldState().getSnapshot();
 ---
 
 <Layout>
-	<Welcome />
+  <main class="mx-auto w-full max-w-6xl px-4 pb-16">
+    <Hero />
+
+    <div class="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+      <!-- Columna principal -->
+      <div class="flex flex-col gap-8">
+        <LiveStats snapshot={snapshot} />
+        <VotingGrid />
+        <Ranking snapshot={snapshot} />
+      </div>
+
+      <!-- Barra lateral: retransmisión en directo -->
+      <div class="lg:sticky lg:top-4 lg:self-start">
+        <LiveEvents />
+      </div>
+    </div>
+  </main>
 </Layout>
+
+<script>
+  import '../scripts/main.ts';
+</script>

@@ -1,0 +1,69 @@
+# Infraestructura local para el Mundial de Clicks.
+#
+#   docker compose up -d
+#
+# Levanta:
+#   - DragonFly  → base de datos en memoria (protocolo Redis) para los votos
+#   - Postgres   → almacén que necesita Umami
+#   - Umami      → analytics self-hosted (opcional)
+#
+# La app Astro se ejecuta aparte con `pnpm dev`. En Coolify cada servicio
+# se crea por separado y se conectan mediante variables de entorno.
+
+services:
+  dragonfly:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:latest
+    container_name: mundial-dragonfly
+    ports:
+      - '6379:6379'
+    volumes:
+      - dragonfly-data:/data
+    # Persistencia por snapshots: DragonFly no soporta AOF, pero guarda
+    # una foto del estado cada 5 min en /data. Suficiente para los votos:
+    # si el server reinicia, como mucho perdemos unos minutos.
+    command: >
+      dragonfly
+      --dir /data
+      --dbfilename snapshot
+      --snapshot_cron "*/5 * * * *"
+    ulimits:
+      memlock: -1
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: mundial-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-umami}
+      POSTGRES_USER: ${POSTGRES_USER:-umami}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-umami_password}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-umami}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  umami:
+    image: ghcr.io/umami-software/umami:postgresql-latest
+    container_name: mundial-umami
+    ports:
+      - '3001:3000'
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-umami}:${POSTGRES_PASSWORD:-umami_password}@postgres:5432/${POSTGRES_DB:-umami}
+      APP_SECRET: ${UMAMI_APP_SECRET:-cambia_este_secreto}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  dragonfly-data:
+  postgres-data:

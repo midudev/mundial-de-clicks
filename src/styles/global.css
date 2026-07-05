@@ -1,0 +1,534 @@
+@import 'tailwindcss';
+
+/* ==== Fuentes ======================================================== */
+
+@font-face {
+  font-family: 'Geist Pixel';
+  src: url('/fonts/GeistPixel-Square.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Geist Sans';
+  src: url('/fonts/Geist-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ==== Tema (Tailwind v4) ============================================= */
+
+@theme {
+  --font-pixel: 'Geist Pixel', monospace;
+  --font-sans: 'Geist Sans', system-ui, sans-serif;
+
+  --color-pitch-950: #050d08;
+  --color-pitch-900: #0a1a10;
+  --color-pitch-800: #0f2618;
+  --color-pitch-700: #14351f;
+  --color-neon: #4ade80;
+  --color-neon-dim: #22c55e;
+  --color-gold: #fbbf24;
+  --color-danger: #f87171;
+}
+
+/* ==== Base ========================================================== */
+
+html {
+  font-family: var(--font-sans);
+  background:
+    radial-gradient(1200px 600px at 50% -10%, #0d2418 0%, transparent 60%),
+    var(--color-pitch-950);
+  color: #e8f5ec;
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+}
+
+/* Scroll siempre invisible (mantiene el scroll, oculta la barra). */
+html {
+  scrollbar-width: none;
+  scrollbar-color: transparent transparent;
+}
+html::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.font-pixel {
+  font-family: var(--font-pixel);
+  letter-spacing: 0.02em;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Banderas: mismo aspecto en todos los sistemas. */
+.flag {
+  display: inline-block;
+  border-radius: 3px;
+  object-fit: cover;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.08);
+}
+
+/* ==== Estadísticas ================================================== */
+
+.stat-card {
+  border-radius: 0.75rem;
+  border: 1px solid rgb(255 255 255 / 0.08);
+  background: rgb(10 26 16 / 0.6);
+  padding: 0.75rem;
+  text-align: center;
+}
+.stat-card__label {
+  margin-top: 0.25rem;
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgb(255 255 255 / 0.4);
+}
+@media (min-width: 640px) {
+  .stat-card__label { font-size: 0.7rem; }
+}
+
+/* ==== Grilla de votación =========================================== */
+
+.vote-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  overflow: hidden;
+  border-radius: 0.85rem;
+  border: 1px solid rgb(255 255 255 / 0.08);
+  background: rgb(10 26 16 / 0.6);
+  padding: 0.85rem 0.9rem;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.15s, background 0.15s, transform 0.06s;
+}
+.vote-card:hover {
+  border-color: rgb(74 222 128 / 0.55);
+  background: var(--color-pitch-800);
+}
+.vote-card:active {
+  transform: scale(0.97);
+  border-color: var(--color-neon);
+}
+.vote-card:focus-visible {
+  outline: 2px solid var(--color-neon);
+  outline-offset: 2px;
+}
+.vote-card__flag {
+  width: 2.25rem;
+  height: 1.7rem;
+  flex-shrink: 0;
+}
+.vote-card__name {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: rgb(255 255 255 / 0.9);
+  min-width: 0;
+  flex: 1;
+}
+/* "+1" que asoma al pasar el ratón / pulsar. */
+.vote-card__hint {
+  font-family: var(--font-pixel);
+  font-size: 0.8rem;
+  color: var(--color-neon);
+  opacity: 0;
+  transform: translateX(4px);
+  transition: opacity 0.15s, transform 0.15s;
+}
+.vote-card:hover .vote-card__hint {
+  opacity: 0.7;
+  transform: translateX(0);
+}
+/* Líder: borde dorado sutil. */
+.vote-card.is-leader {
+  border-color: rgb(251 191 36 / 0.6);
+  background: rgb(35 30 10 / 0.5);
+}
+
+/* Cooldown por rate limit: la grilla se atenúa y no acepta clicks. */
+#voting-grid.is-cooldown {
+  opacity: 0.55;
+  pointer-events: none;
+  transition: opacity 0.2s;
+}
+
+/* ==== Ranking ======================================================= */
+
+.rank-row {
+  display: grid;
+  grid-template-columns: 2rem 1.75rem 1fr auto;
+  align-items: center;
+  gap: 0.75rem;
+  border-radius: 0.6rem;
+  background: rgb(10 26 16 / 0.4);
+  padding: 0.5rem 0.75rem;
+  border: 1px solid transparent;
+}
+.rank-row__pos {
+  font-size: 0.8rem;
+  color: rgb(255 255 255 / 0.45);
+  text-align: center;
+}
+.rank-row__flag {
+  width: 1.75rem;
+  height: 1.3rem;
+}
+.rank-row__name {
+  display: block;
+  font-size: 0.9rem;
+  color: rgb(255 255 255 / 0.85);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rank-row__track {
+  margin-top: 0.35rem;
+  height: 0.4rem;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.06);
+  overflow: hidden;
+}
+.rank-row__bar {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--color-neon-dim), var(--color-neon));
+  transition: width 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.rank-row__count {
+  font-size: 0.9rem;
+  color: rgb(255 255 255 / 0.92);
+  text-align: right;
+  min-width: 3ch;
+}
+/* Líder: glow dorado y barra dorada. */
+.rank-row.is-leader {
+  border-color: rgb(251 191 36 / 0.5);
+  background: rgb(35 30 10 / 0.45);
+  box-shadow: 0 0 24px -6px rgb(251 191 36 / 0.35);
+}
+.rank-row.is-leader .rank-row__bar {
+  background: linear-gradient(90deg, #f59e0b, var(--color-gold));
+}
+.rank-row.is-leader .rank-row__count {
+  color: var(--color-gold);
+}
+
+/* ==== Panel lateral: directo ======================================= */
+
+.live-panel {
+  border-radius: 0.85rem;
+  border: 1px solid rgb(255 255 255 / 0.08);
+  background: rgb(10 26 16 / 0.5);
+  padding: 1rem;
+}
+.live-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: 60vh;
+  overflow-y: auto;
+  /* Scroll invisible también en el panel del directo. */
+  scrollbar-width: none;
+  scrollbar-color: transparent transparent;
+}
+.live-panel__list::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+.live-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: var(--color-danger);
+  box-shadow: 0 0 0 0 rgb(248 113 113 / 0.6);
+  animation: live-pulse 1.6s infinite;
+}
+
+.event {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  color: rgb(255 255 255 / 0.75);
+  padding: 0.4rem 0.5rem;
+  border-radius: 0.5rem;
+  background: rgb(255 255 255 / 0.02);
+  border-left: 2px solid transparent;
+}
+.event--leader { border-left-color: var(--color-gold); color: #fde68a; }
+.event--overtake { border-left-color: var(--color-neon); }
+.event--milestone { border-left-color: var(--color-danger); color: #fecaca; }
+.event--empty {
+  background: transparent;
+  color: rgb(255 255 255 / 0.3);
+  font-style: italic;
+}
+.event__flag {
+  width: 1.25rem;
+  height: 0.95rem;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.event__icon { flex-shrink: 0; }
+
+/* ==== "+1" flotante (juice) ======================================== */
+
+.floating-score {
+  position: fixed;
+  z-index: 50;
+  pointer-events: none;
+  font-family: var(--font-pixel);
+  font-size: 1.1rem;
+  font-weight: 700;
+  transform: translate(-50%, -50%) scale(var(--scale, 1));
+  text-shadow: 0 2px 8px rgb(0 0 0 / 0.5);
+  animation: float-up 0.7s ease-out forwards;
+  will-change: transform, opacity;
+}
+
+/* ==== Animaciones ================================================== */
+
+@keyframes pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(0.94); }
+  100% { transform: scale(1); }
+}
+.animate-pop { animation: pop 0.16s ease-out; }
+
+@keyframes slide-in {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-slide-in { animation: slide-in 0.3s ease-out; }
+
+@keyframes rank-up {
+  0% { background: rgb(74 222 128 / 0.25); }
+  100% { background: rgb(10 26 16 / 0.4); }
+}
+.animate-rank-up { animation: rank-up 0.7s ease-out; }
+
+@keyframes float-up {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(var(--scale, 1)); }
+  15% { opacity: 1; }
+  100% {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--drift, 0px)), -180%) scale(var(--scale, 1));
+  }
+}
+
+@keyframes live-pulse {
+  0% { box-shadow: 0 0 0 0 rgb(248 113 113 / 0.6); }
+  70% { box-shadow: 0 0 0 8px rgb(248 113 113 / 0); }
+  100% { box-shadow: 0 0 0 0 rgb(248 113 113 / 0); }
+}
+
+/* ==== Retos (anti-bot gamificado) ================================== */
+
+.challenge-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgb(5 13 8 / 0.85);
+  backdrop-filter: blur(6px);
+  animation: overlay-in 0.2s ease-out;
+}
+.challenge-overlay--out {
+  animation: overlay-in 0.2s ease-in reverse;
+}
+
+.challenge-card {
+  width: min(28rem, 100%);
+  border-radius: 1rem;
+  border: 1px solid rgb(74 222 128 / 0.35);
+  background: linear-gradient(180deg, var(--color-pitch-800), var(--color-pitch-900));
+  box-shadow: 0 20px 60px -20px rgb(0 0 0 / 0.8);
+  padding: 1.75rem 1.5rem;
+  text-align: center;
+}
+.challenge-card--shake {
+  animation: shake 0.35s ease-in-out;
+  border-color: rgb(248 113 113 / 0.6);
+}
+
+.challenge-title {
+  font-size: 0.8rem;
+  letter-spacing: 0.15em;
+  color: var(--color-neon);
+  margin: 0 0 0.75rem;
+}
+.challenge-question {
+  font-size: 1.25rem;
+  color: #eafff1;
+  margin: 0 0 1.5rem;
+}
+.challenge-question strong { color: var(--color-neon); }
+
+.challenge-options {
+  display: flex;
+  justify-content: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.challenge-option {
+  min-width: 3.5rem;
+  padding: 0.75rem 1rem;
+  font-size: 1.1rem;
+  border-radius: 0.6rem;
+  border: 1px solid rgb(255 255 255 / 0.12);
+  background: rgb(10 26 16 / 0.8);
+  color: #eafff1;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.06s;
+}
+.challenge-option:hover {
+  border-color: var(--color-neon);
+  background: var(--color-pitch-700);
+}
+.challenge-option:active { transform: scale(0.95); }
+.challenge-option--flag {
+  padding: 0.4rem;
+  line-height: 0;
+}
+.challenge-flag {
+  width: 3.75rem;
+  height: 2.8rem;
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.1);
+}
+
+/* ---- Minijuego de penalti ---- */
+.penalty {
+  position: relative;
+  height: 200px;
+  margin-top: 0.5rem;
+  border-radius: 0.75rem;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, #0f3d24 0%, #0a2c19 100%);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.06);
+}
+/* Portería: postes y larguero blancos con red sutil. */
+.penalty__goal {
+  position: absolute;
+  top: 14px;
+  left: 10%;
+  right: 10%;
+  height: 84px;
+  border: 4px solid #f8fafc;
+  border-bottom: none;
+  border-radius: 3px 3px 0 0;
+  background-image:
+    linear-gradient(90deg, rgb(255 255 255 / 0.12) 1px, transparent 1px),
+    linear-gradient(0deg, rgb(255 255 255 / 0.12) 1px, transparent 1px);
+  background-size: 12px 12px;
+}
+.penalty__keeper {
+  position: absolute;
+  top: 54px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 2rem;
+  line-height: 1;
+  transition: left 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+  z-index: 2;
+}
+.penalty__ball {
+  position: absolute;
+  bottom: 34px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 1.7rem;
+  line-height: 1;
+  transition: transform 0.42s cubic-bezier(0.4, 0, 0.6, 1);
+  z-index: 3;
+  will-change: transform;
+}
+.penalty__zones {
+  position: absolute;
+  top: 14px;
+  left: 10%;
+  right: 10%;
+  height: 84px;
+  display: flex;
+  z-index: 4;
+}
+.penalty__zone {
+  flex: 1;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.penalty__zone:hover {
+  background: rgb(74 222 128 / 0.18);
+}
+.penalty__zone:active {
+  background: rgb(74 222 128 / 0.3);
+}
+.penalty__hint {
+  position: absolute;
+  bottom: 6px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  margin: 0;
+  font-size: 0.7rem;
+  color: rgb(255 255 255 / 0.45);
+}
+.penalty__result {
+  position: absolute;
+  top: 40%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 5;
+  font-family: var(--font-pixel);
+  font-size: 1.6rem;
+  font-weight: 700;
+  text-shadow: 0 3px 12px rgb(0 0 0 / 0.7);
+  pointer-events: none;
+}
+.penalty__result--goal {
+  color: var(--color-neon);
+  animation: pop 0.3s ease-out;
+}
+.penalty__result--save {
+  color: var(--color-danger);
+  animation: pop 0.3s ease-out;
+}
+
+@keyframes overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-8px); }
+  40% { transform: translateX(8px); }
+  60% { transform: translateX(-6px); }
+  80% { transform: translateX(6px); }
+}
+
+/* Respeta a quien prefiere menos movimiento. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-pop,
+  .animate-slide-in,
+  .animate-rank-up,
+  .floating-score,
+  .live-dot,
+  .challenge-card--shake { animation: none; }
+}

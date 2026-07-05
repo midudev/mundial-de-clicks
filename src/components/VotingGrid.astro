@@ -1,0 +1,35 @@
+---
+import { COUNTRIES } from '../lib/countries';
+import Flag from './Flag.astro';
+
+/**
+ * Grilla de botones de voto, uno por selección. Sin números: los votos
+ * se ven en el ranking. Aquí solo bandera + nombre, grande y clickable.
+ *
+ * Los clicks se delegan desde el contenedor (event delegation) para no
+ * registrar 16 listeners y aguantar mejor el clickeo masivo.
+ */
+---
+
+<section class="w-full">
+  <h2 class="sr-only">Selecciones</h2>
+  <div
+    id="voting-grid"
+    class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-3"
+  >
+    {
+      COUNTRIES.map((country) => (
+        <button
+          type="button"
+          data-vote={country.code}
+          class="vote-card group"
+          aria-label={`Votar por ${country.name}`}
+        >
+          <Flag code={country.code} name={country.name} class="vote-card__flag" />
+          <span class="vote-card__name">{country.name}</span>
+          <span class="vote-card__hint" aria-hidden="true">+1</span>
+        </button>
+      ))
+    }
+  </div>
+</section>

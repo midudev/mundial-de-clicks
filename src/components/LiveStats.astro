@@ -1,0 +1,32 @@
+---
+import type { WorldSnapshot } from '../lib/types';
+import { formatCompact } from '../lib/format';
+
+/**
+ * Barra de estadísticas globales en vivo. Los valores se hidratan por
+ * SSE desde el cliente (data-stat) y se muestran en formato compacto.
+ */
+interface Props {
+  snapshot: WorldSnapshot;
+}
+const { snapshot } = Astro.props;
+
+const stats = [
+  { key: 'total', label: 'Votos totales', value: snapshot.totalVotes, accent: 'text-white' },
+  { key: 'cps', label: 'Clicks / segundo', value: snapshot.clicksPerSecond, accent: 'text-neon' },
+  { key: 'blocked', label: 'Clicks bloqueados', value: snapshot.blockedClicks, accent: 'text-danger' },
+] as const;
+---
+
+<section class="grid grid-cols-3 gap-2 sm:gap-4 w-full" aria-label="Estadísticas en vivo">
+  {
+    stats.map((stat) => (
+      <div class="stat-card">
+        <div class={`font-pixel text-xl sm:text-3xl tabular ${stat.accent}`} data-stat={stat.key}>
+          {formatCompact(stat.value)}
+        </div>
+        <div class="stat-card__label">{stat.label}</div>
+      </div>
+    ))
+  }
+</section>
