@@ -14,6 +14,9 @@ importers:
       '@cap.js/server':
         specifier: ^4.0.5
         version: 4.0.5
+      '@cap.js/wasm':
+        specifier: 0.0.7
+        version: 0.0.7
       '@cap.js/widget':
         specifier: ^0.1.56
         version: 0.1.56
@@ -29,6 +32,9 @@ importers:
       geist:
         specifier: ^1.7.2
         version: 1.7.2(next@16.2.10(react-dom@19.2.7(react@19.2.7))(react@19.2.7))
+      pako:
+        specifier: 2.1.0
+        version: 2.1.0
       redis:
         specifier: ^4.7.1
         version: 4.7.1
@@ -230,6 +236,9 @@ packages:
 
   '@cap.js/server@4.0.5':
     resolution: {integrity: sha512-S902YIyGyiriNaexfqTzMy5ixxSb3/jYSJwr2gAY9d7XXoYftcifgij/11pjuiU72Ogm6XKZOggDB2DtjRMyww==}
+
+  '@cap.js/wasm@0.0.7':
+    resolution: {integrity: sha512-IgUjrPOUBaOjTp+BkrhfEBBeQ4An7fQiSWWezDy9Uvd+OdTYm4+h3AJU0j/CpHYayp7FltZU+UePC6p28oGQaw==}
 
   '@cap.js/widget@0.1.56':
     resolution: {integrity: sha512-j640dNNNIF8IWmwqmSx0ihgU8sz/6Jm9mHveeDWUk8aXVqFm+2TSsp5bawtMtgf0aa7rFkmT9p76jrqO1uSEpQ==}
@@ -1752,6 +1761,9 @@ packages:
   package-manager-detector@1.7.0:
     resolution: {integrity: sha512-xg1eHpwYL/D/HEdWw2goFZP6vV0FH7W+PZ5rFkGjdIDLtxq7EkzBUeT3m+lndYCt8wKbmofUu1MUdMCXkCk9ZQ==}
 
+  pako@2.1.0:
+    resolution: {integrity: sha512-w+eufiZ1WuJYgPXbV/PO3NCMEc3xqylkKHzp8bxp1uW4qaSNQUkwmLLEc3kKsfz8lpV1F8Ht3U1Cm+9Srog2ug==}
+
   path-browserify@1.0.1:
     resolution: {integrity: sha512-b7uo2UCUOYZcnF/3ID0lulOJi/bafxa1xPe7ZPsammBSpjSWQkjNxlt635YGS2MiR9GjvuXCtz2emr3jbsz98g==}
 
@@ -2484,6 +2496,8 @@ snapshots:
     optional: true
 
   '@cap.js/server@4.0.5': {}
+
+  '@cap.js/wasm@0.0.7': {}
 
   '@cap.js/widget@0.1.56': {}
 
@@ -3787,6 +3801,8 @@ snapshots:
   p-timeout@7.0.1: {}
 
   package-manager-detector@1.7.0: {}
+
+  pako@2.1.0: {}
 
   path-browserify@1.0.1: {}
 

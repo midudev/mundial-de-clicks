@@ -6,6 +6,10 @@
  * sin tocar el código.
  */
 
+// Vuelca los `.env*` a process.env en local (no-op en producción). Debe ir
+// ANTES de cualquier lectura de process.env de este módulo.
+import './load-env';
+
 /** Lee una variable de entorno con valor por defecto. */
 function env(key: string, fallback: string): string {
   return process.env[key] ?? fallback;
@@ -30,9 +34,9 @@ export const config = {
   },
   rateLimit: {
     /** Máximo de clicks válidos por ventana y por IP. */
-    maxPerWindow: envInt('RATE_LIMIT_MAX', 15),
+    maxPerWindow: envInt('RATE_LIMIT_MAX', 10),
     /** Duración de la ventana en segundos. */
-    windowSeconds: envInt('RATE_LIMIT_WINDOW', 1),
+    windowSeconds: envInt('RATE_LIMIT_WINDOW', 2),
     /**
      * Número de proxies de confianza entre el cliente y la app. Se usa
      * para leer la IP REAL de `x-forwarded-for` sin que el cliente la
@@ -40,6 +44,16 @@ export const config = {
      * delante (p.ej. Cloudflare), serían 2.
      */
     trustedProxyHops: envInt('TRUSTED_PROXY_HOPS', 1),
+  },
+  captcha: {
+    /**
+     * URL base del servidor Cap standalone, incluyendo la siteKey:
+     * `https://mi-cap.ejemplo.com/{siteKey}`. Si está vacía, el captcha
+     * queda desactivado y se vota sin él. Nuestro backend hace de proxy a
+     * `${apiUrl}/challenge` y `${apiUrl}/redeem` (mismo origen para el
+     * widget, sin CORS ni mixed-content).
+     */
+    apiUrl: env('CAP_API_URL', '').replace(/\/+$/, ''),
   },
   stream: {
     /** Intervalo en ms entre snapshots enviados por SSE. */

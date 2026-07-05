@@ -1,6 +1,8 @@
 import { getRedis } from './redis';
 import { buildRanking } from './ranking';
 import { config } from './config';
+import { hasDragonfly } from './features';
+import { castVotesMemory, readWorldMemory } from './memory-store';
 import type { RankingEntry } from './types';
 import type { RedisClientType } from 'redis';
 
@@ -26,6 +28,8 @@ const CPS_PREFIX = 'cps';
 
 /** Resultado de procesar un lote de votos. */
 export interface VoteOutcome {
+  /** false si no había sesión de captcha válida (nada se procesó). */
+  sessionValid: boolean;
   /** Votos aceptados del lote. */
   accepted: number;
   /** Votos bloqueados por rate limit. */
@@ -40,16 +44,29 @@ export interface VoteOutcome {
 
 /**
  * Script Lua atómico. Hace, en el servidor y de una sola vez:
+ *   0. Comprueba que exista la SESIÓN de captcha (si no, corta con -1).
  *   1. INCRBY de la ventana de rate limit + EXPIRE.
  *   2. Calcula cuántos votos caben (allowed) y cuántos se bloquean.
  *   3. ZINCRBY por país (repartiendo el cupo permitido en orden).
  *   4. INCRBY de total y de clicks/segundo (+EXPIRE), y de bloqueados.
- *   5. Devuelve [accepted, blocked, remaining, code, score, code, score...].
+ *   5. Devuelve [accepted, blocked, remaining, code, score, code, score...]
+ *      o [-1] si no hay sesión de captcha válida.
  *
- * KEYS: rl, ranking, total, cps, blocked
- * ARGV: cost, maxWin, winExpire, cpsExpire, [code, count]...
+ * KEYS: rl, ranking, total, cps, blocked, session
+ * ARGV: cost, maxWin, winExpire, cpsExpire, sessionTtl, requireSession,
+ *       [code, count]...
  */
 const VOTE_SCRIPT = `
+-- 0. Si el captcha está activo (requireSession=1) exigimos una sesión
+--    válida; si no existe, cortamos con -1. Con captcha desactivado se
+--    salta esta comprobación por completo.
+if tonumber(ARGV[6]) == 1 then
+  if redis.call('EXISTS', KEYS[6]) == 0 then
+    return {-1}
+  end
+  redis.call('EXPIRE', KEYS[6], tonumber(ARGV[5]))
+end
+
 local cost = tonumber(ARGV[1])
 local maxWin = tonumber(ARGV[2])
 local winExp = tonumber(ARGV[3])
@@ -67,7 +84,7 @@ local blocked = cost - allowed
 local budget = allowed
 local accepted = 0
 local out = {}
-local i = 5
+local i = 7
 while i < #ARGV do
   local code = ARGV[i]
   local cnt = tonumber(ARGV[i + 1])
@@ -129,17 +146,33 @@ async function runVoteScript(
   }
 }
 
+/** Sesión de captcha a verificar de forma atómica (si el captcha está on). */
+export interface VoteSession {
+  /** Clave de DragonFly de la sesión. */
+  key: string;
+  /** TTL a renovar en cada voto (segundos). */
+  ttl: number;
+}
+
 /**
  * Procesa un lote de votos de forma atómica.
- * @param ip    IP del cliente (para el rate limit).
- * @param votes Mapa code -> cantidad solicitada.
- * @param cost  Total solicitado (suma de cantidades, ya recortado).
+ * @param ip      IP del cliente (para el rate limit).
+ * @param votes   Mapa code -> cantidad solicitada.
+ * @param cost    Total solicitado (suma de cantidades, ya recortado).
+ * @param session Sesión de captcha a exigir (omitir si el captcha está off).
+ *
+ * Sin DragonFly configurado, cae al store en memoria (modo demo).
  */
 export async function castVotes(
   ip: string,
   votes: Map<string, number>,
   cost: number,
+  session?: VoteSession,
 ): Promise<VoteOutcome> {
+  if (!hasDragonfly) {
+    return castVotesMemory(ip, votes, cost);
+  }
+
   const redis = await getRedis();
   const { maxPerWindow, windowSeconds } = config.rateLimit;
 
@@ -153,6 +186,8 @@ export async function castVotes(
     TOTAL_KEY,
     `${CPS_PREFIX}:${second}`,
     BLOCKED_KEY,
+    // Con captcha off, KEYS[6] no se toca; un placeholder es suficiente.
+    session?.key ?? 'session:__none__',
   ];
 
   const args = [
@@ -160,12 +195,26 @@ export async function castVotes(
     String(maxPerWindow),
     String(windowSeconds + 1),
     '5', // expiración de la ventana de clicks/segundo
+    String(session?.ttl ?? 1),
+    session ? '1' : '0', // requireSession
   ];
   for (const [code, count] of votes) {
     args.push(code, String(count));
   }
 
   const reply = await runVoteScript(redis, keys, args);
+
+  // El script devuelve [-1] si la sesión de captcha no es válida.
+  if (Number(reply[0]) === -1) {
+    return {
+      sessionValid: false,
+      accepted: 0,
+      blocked: 0,
+      remaining: 0,
+      counts: {},
+      retryAfter: 0,
+    };
+  }
 
   const accepted = Number(reply[0]);
   const blocked = Number(reply[1]);
@@ -178,7 +227,7 @@ export async function castVotes(
   const retryAfter =
     blocked > 0 ? (window + 1) * windowSeconds * 1000 - now : 0;
 
-  return { accepted, blocked, remaining, counts, retryAfter };
+  return { sessionValid: true, accepted, blocked, remaining, counts, retryAfter };
 }
 
 /**
@@ -192,6 +241,10 @@ export async function readWorld(): Promise<{
   blockedClicks: number;
   clicksPerSecond: number;
 }> {
+  if (!hasDragonfly) {
+    return readWorldMemory();
+  }
+
   const redis = await getRedis();
   const previousSecond = Math.floor(Date.now() / 1000) - 1;
 

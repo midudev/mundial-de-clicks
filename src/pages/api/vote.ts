@@ -1,7 +1,14 @@
 import type { APIRoute } from 'astro';
 import { getClientIp } from '../../lib/rate-limit';
-import { castVotes } from '../../lib/votes';
+import { castVotes, type VoteSession } from '../../lib/votes';
 import { isValidCountry, COUNTRIES } from '../../lib/countries';
+import { hasCaptcha } from '../../lib/features';
+import {
+  readCookie,
+  sessionKey,
+  SESSION_COOKIE,
+  SESSION_TTL,
+} from '../../lib/captcha';
 import type { VoteResponse } from '../../lib/types';
 
 export const prerender = false;
@@ -115,13 +122,29 @@ export const POST: APIRoute = async ({ request }) => {
   // Recorta el lote a un máximo razonable.
   total = Math.min(total, MAX_BATCH);
 
-  // --- Procesamiento atómico (rate limit + escritura) ---------------
+  // --- Captcha (solo si está activado) ------------------------------
+  // Si el captcha está off, no se exige sesión: se vota directamente.
+  let session: VoteSession | undefined;
+  if (hasCaptcha) {
+    const sessionId = readCookie(request, SESSION_COOKIE);
+    if (!sessionId) {
+      return json({ ok: false, reason: 'captcha_required' }, 403);
+    }
+    session = { key: sessionKey(sessionId), ttl: SESSION_TTL };
+  }
+
+  // --- Procesamiento atómico (sesión + rate limit + escritura) ------
   const ip = getClientIp(request);
   let outcome;
   try {
-    outcome = await castVotes(ip, votes, total);
+    outcome = await castVotes(ip, votes, total, session);
   } catch {
     return json({ ok: false, reason: 'error' }, 500);
+  }
+
+  // La sesión no existe/expiró: hay que volver a pasar el captcha.
+  if (hasCaptcha && !outcome.sessionValid) {
+    return json({ ok: false, reason: 'captcha_required' }, 403);
   }
 
   if (outcome.accepted === 0) {

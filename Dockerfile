@@ -12,6 +12,14 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
+# Analytics de Umami: son PUBLIC_* → Vite las incrusta en BUILD, así que
+# entran como build args (no como entorno de runtime). Vacías por defecto:
+# si no las pasas, simplemente no se inyecta el script de Umami.
+ARG PUBLIC_UMAMI_SCRIPT_URL=""
+ARG PUBLIC_UMAMI_WEBSITE_ID=""
+ENV PUBLIC_UMAMI_SCRIPT_URL=$PUBLIC_UMAMI_SCRIPT_URL
+ENV PUBLIC_UMAMI_WEBSITE_ID=$PUBLIC_UMAMI_WEBSITE_ID
+
 # Construir la app.
 COPY . .
 RUN pnpm build

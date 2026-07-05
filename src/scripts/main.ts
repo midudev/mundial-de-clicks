@@ -10,6 +10,13 @@ import {
 } from './dom';
 import { spawnFloatingScore } from './effects';
 import { startChallenge, challengeActive } from './challenge';
+import {
+  checkSession,
+  verifyInvisible,
+  resetVerified,
+  isVerified,
+} from './captcha';
+import { renderStatus } from './status';
 
 /**
  * Punto de entrada del cliente.
@@ -57,33 +64,75 @@ let comboResetTimer: number | null = null;
 let cooldownUntil = 0;
 const isCoolingDown = () => Date.now() < cooldownUntil;
 
-/** Acumula un voto en el lote. Abre la ventana de agrupado si no hay una. */
-function queueVote(code: string): void {
-  pending.set(code, (pending.get(code) ?? 0) + 1);
-  // Solo se programa un flush por ventana: los clicks siguientes caen en
-  // el mismo lote hasta que la ventana se cierra.
+/** Programa un envío del lote si no hay ya uno programado. */
+function scheduleFlush(delay = FLUSH_MS): void {
   if (flushTimer === null) {
-    flushTimer = window.setTimeout(flush, FLUSH_MS);
+    flushTimer = window.setTimeout(flush, delay);
   }
 }
 
-/** Envía el lote acumulado al servidor. */
+/** Acumula un voto en el lote y programa su envío. */
+function queueVote(code: string): void {
+  pending.set(code, (pending.get(code) ?? 0) + 1);
+  scheduleFlush();
+}
+
+/** true mientras hay un envío/verificación en curso (un solo lote a la vez). */
+let sending = false;
+
+/**
+ * Envía el lote acumulado. Garantías:
+ *   - Solo UN envío en curso a la vez (guard `sending`): los clicks que
+ *     llegan durante una verificación/envío se acumulan y salen en el
+ *     siguiente lote. Nunca hay dobles envíos ni errores de carrera.
+ *   - Los votos NUNCA se pierden: si el captcha aún no está listo o falla,
+ *     el lote se mantiene en `pending` y se reintenta.
+ */
 async function flush(): Promise<void> {
   flushTimer = null;
-  if (pending.size === 0) return;
+  if (sending || pending.size === 0) return;
+  sending = true;
 
-  const batch = new Map(pending);
-  pending.clear();
+  // Reintento tras terminar (0 = ninguno salvo que quede pendiente).
+  let retryDelay = 0;
 
-  const res = await sendVotes(batch);
+  try {
+    // Captcha invisible: la 1ª vez resolvemos el PoW en segundo plano (con
+    // el WASM ya precalentado). Si falla, reintentamos sin perder votos.
+    if (!isVerified()) {
+      const ok = await verifyInvisible();
+      if (!ok) {
+        retryDelay = 1500;
+        return;
+      }
+    }
 
-  // Si nos frenan, entramos en cooldown para dejar de spamear la red.
-  if (res.reason === 'rate_limited' && res.retryAfter) {
-    cooldownUntil = Date.now() + res.retryAfter;
-    setCooldown(true);
-    window.setTimeout(() => {
-      if (!isCoolingDown()) setCooldown(false);
-    }, res.retryAfter + 50);
+    const batch = new Map(pending);
+    pending.clear();
+
+    const res = await sendVotes(batch);
+
+    // Sesión caducada en el servidor: reverificamos y reencolamos el lote.
+    if (res.reason === 'captcha_required') {
+      resetVerified();
+      for (const [code, count] of batch) {
+        pending.set(code, (pending.get(code) ?? 0) + count);
+      }
+      retryDelay = 300;
+      return;
+    }
+
+    // Rate limit: cooldown para dejar de spamear la red.
+    if (res.reason === 'rate_limited' && res.retryAfter) {
+      cooldownUntil = Date.now() + res.retryAfter;
+      setCooldown(true);
+      window.setTimeout(() => {
+        if (!isCoolingDown()) setCooldown(false);
+      }, res.retryAfter + 50);
+    }
+  } finally {
+    sending = false;
+    if (pending.size > 0) scheduleFlush(retryDelay || FLUSH_MS);
   }
 }
 
@@ -103,7 +152,8 @@ function updateCombo(): number {
 
 /** Maneja un click sobre un botón de voto. */
 function handleVote(button: HTMLElement, code: string, x: number, y: number): void {
-  // Si hay un reto en curso o estamos en cooldown, no se puede votar.
+  // Con reto en curso o en cooldown, no se vota. El captcha NO bloquea el
+  // click: se resuelve invisible al enviar el primer lote (ver flush).
   if (challengeActive() || isCoolingDown()) return;
 
   // 1. Feedback inmediato (optimista): estado + UI + efectos.
@@ -177,6 +227,11 @@ function init(): void {
   setupVoting();
   setupStream();
   setupUnloadFlush();
+  // Si ya hay sesión válida (votó hace poco), queda verificado sin hacer
+  // nada. Si no, la verificación invisible salta al primer voto.
+  void checkSession();
+  // Avisos de despliegue: qué está configurado y qué falta.
+  void renderStatus();
 }
 
 if (document.readyState === 'loading') {
