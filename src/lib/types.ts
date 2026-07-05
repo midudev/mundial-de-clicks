@@ -53,7 +53,7 @@ export interface VoteResponse {
   /** Clicks restantes en la ventana de rate limit. */
   remaining?: number;
   /** Motivo del rechazo total (si !ok). */
-  reason?: 'rate_limited' | 'invalid_payload' | 'error';
+  reason?: 'rate_limited' | 'invalid_payload' | 'payload_too_large' | 'error';
   /** Milisegundos hasta poder reintentar (si rate_limited). */
   retryAfter?: number;
 }

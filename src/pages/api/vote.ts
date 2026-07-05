@@ -10,12 +10,59 @@ export const prerender = false;
 const MAX_BATCH = 100;
 /** Máximo de claves distintas que miramos (nunca más que países). */
 const MAX_KEYS = COUNTRIES.length;
+/** Tamaño máximo del body en bytes (el payload real es diminuto). */
+const MAX_BODY_BYTES = 2_048;
 
 function json(body: VoteResponse, status: number): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { 'content-type': 'application/json' },
   });
+}
+
+/**
+ * Lee el cuerpo como texto con un tope DURO de bytes.
+ *
+ * Defensa contra DoS de memoria: NO nos fiamos del `Content-Length` (se
+ * puede mentir u omitir con `Transfer-Encoding: chunked`). Contamos los
+ * bytes según llegan y abortamos el stream en cuanto se pasa, así nunca
+ * buffeamos megas en memoria. Devuelve `null` si excede el límite.
+ */
+async function readBodyLimited(
+  request: Request,
+  maxBytes: number,
+): Promise<string | null> {
+  if (!request.body) {
+    const text = await request.text();
+    return Buffer.byteLength(text) > maxBytes ? null : text;
+  }
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        return null;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+
+  const buf = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    buf.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(buf);
 }
 
 /**
@@ -27,10 +74,17 @@ function json(body: VoteResponse, status: number): Response {
  * escribir— se hace en una única operación atómica en DragonFly.
  */
 export const POST: APIRoute = async ({ request }) => {
+  // Rechaza bodies desproporcionados sin buffear megas en memoria. El tope
+  // se aplica leyendo el stream, no confiando en el Content-Length.
+  const text = await readBodyLimited(request, MAX_BODY_BYTES);
+  if (text === null) {
+    return json({ ok: false, reason: 'payload_too_large' }, 413);
+  }
+
   // --- Validación de payload ----------------------------------------
   let rawVotes: Record<string, unknown>;
   try {
-    const body = (await request.json()) as { votes?: Record<string, unknown> };
+    const body = JSON.parse(text) as { votes?: Record<string, unknown> };
     rawVotes = body.votes ?? {};
   } catch {
     return json({ ok: false, reason: 'invalid_payload' }, 400);
