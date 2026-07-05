@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { getRedis } from './redis';
+import { getRedis, withTimeout } from './redis';
 import { config } from './config';
 
 /**
@@ -40,10 +40,14 @@ export async function proxyToCap(
   body: unknown,
 ): Promise<{ status: number; data: unknown }> {
   const base = capApiUrl();
+  // Timeout DURO: si el servidor Cap se cuelga, no dejamos la petición (ni el
+  // socket del cliente) colgada indefinidamente. `AbortSignal.timeout` aborta
+  // el fetch y el endpoint que nos llama lo traduce a un 502 controlado.
   const res = await fetch(`${base}/${subpath}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body ?? {}),
+    signal: AbortSignal.timeout(config.captchaHttp.timeoutMs),
   });
   let data: unknown = null;
   try {
@@ -58,7 +62,11 @@ export async function proxyToCap(
 export async function createSession(): Promise<string> {
   const redis = await getRedis();
   const id = randomUUID();
-  await redis.set(SESSION_PREFIX + id, '1', { EX: SESSION_TTL });
+  await withTimeout(
+    redis.set(SESSION_PREFIX + id, '1', { EX: SESSION_TTL }),
+    config.redis.commandTimeoutMs,
+    'captcha/createSession',
+  );
   return id;
 }
 
@@ -71,7 +79,12 @@ export function sessionKey(id: string): string {
 export async function isSessionValid(id: string): Promise<boolean> {
   if (!id) return false;
   const redis = await getRedis();
-  return (await redis.exists(SESSION_PREFIX + id)) === 1;
+  const exists = await withTimeout(
+    redis.exists(SESSION_PREFIX + id),
+    config.redis.commandTimeoutMs,
+    'captcha/isSessionValid',
+  );
+  return exists === 1;
 }
 
 /** Lee una cookie del header `cookie` de una petición. */

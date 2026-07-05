@@ -21,9 +21,9 @@ const EVENT_ICON: Record<LiveEvent['type'], string> = {
 
 /** Actualiza la barra de estadísticas globales (formato compacto). */
 export function renderStats(): void {
-  const { total, clicksPerSecond, blocked } = getStats();
+  const { total, clicksPerMinute, blocked } = getStats();
   setStat('total', total);
-  setStat('cps', clicksPerSecond);
+  setStat('cpm', clicksPerMinute);
   setStat('blocked', blocked);
 }
 

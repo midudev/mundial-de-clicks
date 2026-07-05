@@ -1,4 +1,4 @@
-import { getRedis } from './redis';
+import { getRedis, withTimeout } from './redis';
 import { buildRanking } from './ranking';
 import { config } from './config';
 import { hasDragonfly } from './features';
@@ -13,7 +13,9 @@ import type { RedisClientType } from 'redis';
  *   votes:ranking      ZSET  (member = code, score = votos)
  *   votes:total        INT   contador global de votos válidos
  *   votes:blocked      INT   clicks bloqueados por rate limit
- *   cps:{epochSecond}  INT    votos en ese segundo (clicks/segundo)
+ *   cpm:{epochSecond}  INT    votos en ese segundo. Los clicks/minuto se
+ *                             calculan sumando los 60 últimos segundos
+ *                             (ventana deslizante) al leer el mundo.
  *   rl:{ip}:{window}   INT   ventana de rate limit por IP
  *
  * Optimización clave: el voto se procesa con un ÚNICO script Lua atómico
@@ -24,7 +26,10 @@ import type { RedisClientType } from 'redis';
 const RANKING_KEY = 'votes:ranking';
 const TOTAL_KEY = 'votes:total';
 const BLOCKED_KEY = 'votes:blocked';
-const CPS_PREFIX = 'cps';
+const CPM_PREFIX = 'cpm';
+
+/** Segundos de la ventana deslizante para calcular los clicks/minuto. */
+const MINUTE_WINDOW = 60;
 
 /** Resultado de procesar un lote de votos. */
 export interface VoteOutcome {
@@ -48,12 +53,13 @@ export interface VoteOutcome {
  *   1. INCRBY de la ventana de rate limit + EXPIRE.
  *   2. Calcula cuántos votos caben (allowed) y cuántos se bloquean.
  *   3. ZINCRBY por país (repartiendo el cupo permitido en orden).
- *   4. INCRBY de total y de clicks/segundo (+EXPIRE), y de bloqueados.
+ *   4. INCRBY de total y del bucket del segundo actual (+EXPIRE), y de
+ *      bloqueados. Los clicks/minuto se derivan al leer sumando 60 buckets.
  *   5. Devuelve [accepted, blocked, remaining, code, score, code, score...]
  *      o [-1] si no hay sesión de captcha válida.
  *
  * KEYS: rl, ranking, total, cps, blocked, session
- * ARGV: cost, maxWin, winExpire, cpsExpire, sessionTtl, requireSession,
+ * ARGV: cost, maxWin, winExpire, bucketExpire, sessionTtl, requireSession,
  *       [code, count]...
  */
 const VOTE_SCRIPT = `
@@ -70,7 +76,7 @@ end
 local cost = tonumber(ARGV[1])
 local maxWin = tonumber(ARGV[2])
 local winExp = tonumber(ARGV[3])
-local cpsExp = tonumber(ARGV[4])
+local bucketExp = tonumber(ARGV[4])
 
 local countAfter = redis.call('INCRBY', KEYS[1], cost)
 redis.call('EXPIRE', KEYS[1], winExp)
@@ -103,7 +109,7 @@ end
 if accepted > 0 then
   redis.call('INCRBY', KEYS[3], accepted)
   redis.call('INCRBY', KEYS[4], accepted)
-  redis.call('EXPIRE', KEYS[4], cpsExp)
+  redis.call('EXPIRE', KEYS[4], bucketExp)
 end
 if blocked > 0 then
   redis.call('INCRBY', KEYS[5], blocked)
@@ -125,22 +131,33 @@ async function runVoteScript(
   keys: string[],
   args: string[],
 ): Promise<(string | number)[]> {
+  const timeout = config.redis.commandTimeoutMs;
   if (!scriptSha) {
-    scriptSha = await redis.scriptLoad(VOTE_SCRIPT);
+    scriptSha = await withTimeout(
+      redis.scriptLoad(VOTE_SCRIPT),
+      timeout,
+      'vote/scriptLoad',
+    );
   }
   try {
-    return (await redis.evalSha(scriptSha, {
-      keys,
-      arguments: args,
-    })) as (string | number)[];
+    return (await withTimeout(
+      redis.evalSha(scriptSha, { keys, arguments: args }),
+      timeout,
+      'vote/evalSha',
+    )) as (string | number)[];
   } catch (err) {
     // Si DragonFly reinició y perdió el script, recargamos y reintentamos.
     if (String(err).includes('NOSCRIPT')) {
-      scriptSha = await redis.scriptLoad(VOTE_SCRIPT);
-      return (await redis.evalSha(scriptSha, {
-        keys,
-        arguments: args,
-      })) as (string | number)[];
+      scriptSha = await withTimeout(
+        redis.scriptLoad(VOTE_SCRIPT),
+        timeout,
+        'vote/scriptLoad',
+      );
+      return (await withTimeout(
+        redis.evalSha(scriptSha, { keys, arguments: args }),
+        timeout,
+        'vote/evalSha',
+      )) as (string | number)[];
     }
     throw err;
   }
@@ -184,7 +201,7 @@ export async function castVotes(
     `rl:${ip}:${window}`,
     RANKING_KEY,
     TOTAL_KEY,
-    `${CPS_PREFIX}:${second}`,
+    `${CPM_PREFIX}:${second}`,
     BLOCKED_KEY,
     // Con captcha off, KEYS[6] no se toca; un placeholder es suficiente.
     session?.key ?? 'session:__none__',
@@ -194,7 +211,9 @@ export async function castVotes(
     String(cost),
     String(maxPerWindow),
     String(windowSeconds + 1),
-    '5', // expiración de la ventana de clicks/segundo
+    // TTL del bucket por segundo: debe cubrir toda la ventana de 60s que
+    // se suma al leer, con un pequeño margen para no perder el borde.
+    String(MINUTE_WINDOW + 10),
     String(session?.ttl ?? 1),
     session ? '1' : '0', // requireSession
   ];
@@ -232,32 +251,48 @@ export async function castVotes(
 
 /**
  * Lee todo el estado del mundo en UN SOLO pipeline (una ida y vuelta):
- * ranking, total, bloqueados y clicks/segundo. Lo usa el poller una vez
+ * ranking, total, bloqueados y clicks/minuto. Lo usa el poller una vez
  * por tick, así que su coste es constante e independiente del tráfico.
+ *
+ * Los clicks/minuto son una ventana DESLIZANTE: sumamos los 60 buckets
+ * por segundo previos (con un solo MGET). Así el número se refresca en
+ * cada tick en vez de dar un salto una vez por minuto, y el coste extra
+ * (60 claves por tick, no por petición) es despreciable para DragonFly.
  */
 export async function readWorld(): Promise<{
   ranking: RankingEntry[];
   totalVotes: number;
   blockedClicks: number;
-  clicksPerSecond: number;
+  clicksPerMinute: number;
 }> {
   if (!hasDragonfly) {
     return readWorldMemory();
   }
 
   const redis = await getRedis();
-  const previousSecond = Math.floor(Date.now() / 1000) - 1;
+
+  // Segundos [now-60 .. now-1]: 60 buckets completos (excluimos el segundo
+  // en curso, que aún se está llenando, para no mostrar un valor a medias).
+  const nowSecond = Math.floor(Date.now() / 1000);
+  const minuteKeys: string[] = [];
+  for (let i = 1; i <= MINUTE_WINDOW; i++) {
+    minuteKeys.push(`${CPM_PREFIX}:${nowSecond - i}`);
+  }
 
   const multi = redis.multi();
   multi.zRangeWithScores(RANKING_KEY, 0, -1, { REV: true });
   multi.get(TOTAL_KEY);
   multi.get(BLOCKED_KEY);
-  multi.get(`${CPS_PREFIX}:${previousSecond}`);
-  const [raw, total, blocked, cps] = (await multi.exec()) as [
+  multi.mGet(minuteKeys);
+  const [raw, total, blocked, buckets] = (await withTimeout(
+    multi.exec(),
+    config.redis.commandTimeoutMs,
+    'readWorld/exec',
+  )) as [
     { value: string; score: number }[],
     string | null,
     string | null,
-    string | null,
+    (string | null)[],
   ];
 
   const scores = new Map<string, number>();
@@ -265,10 +300,15 @@ export async function readWorld(): Promise<{
     scores.set(value, score);
   }
 
+  let clicksPerMinute = 0;
+  for (const bucket of buckets) {
+    if (bucket) clicksPerMinute += Number(bucket);
+  }
+
   return {
     ranking: buildRanking(scores),
     totalVotes: Number(total ?? 0),
     blockedClicks: Number(blocked ?? 0),
-    clicksPerSecond: Number(cps ?? 0),
+    clicksPerMinute,
   };
 }

@@ -13,7 +13,16 @@ export const prerender = false;
 export const GET: APIRoute = async ({ request }) => {
   const required = hasCaptcha;
   const id = readCookie(request, SESSION_COOKIE) ?? '';
-  const valid = required ? await isSessionValid(id) : true;
+  // Si DragonFly no responde a tiempo, damos la sesión por NO válida (el
+  // cliente reverificará al votar) en vez de romper con un 500.
+  let valid = !required;
+  if (required) {
+    try {
+      valid = await isSessionValid(id);
+    } catch {
+      valid = false;
+    }
+  }
 
   return new Response(JSON.stringify({ required, valid }), {
     status: 200,

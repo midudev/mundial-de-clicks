@@ -11,7 +11,12 @@ export const prerender = false;
  * la carga inicial de la página y como fallback si SSE no está disponible.
  */
 export const GET: APIRoute = async () => {
-  const snapshot = getWorldState().getSnapshot();
+  const world = getWorldState();
+  // Fuerza una lectura fresca: si no hay espectadores SSE, el poller está
+  // dormido y el snapshot podría estar viejo. `refresh` respeta su propio
+  // timeout y guard, así que es barato y seguro.
+  await world.refresh();
+  const snapshot = world.getSnapshot();
   return new Response(JSON.stringify(snapshot), {
     status: 200,
     headers: {

@@ -38,7 +38,7 @@ class WorldState {
   private snapshot: WorldSnapshot = {
     ranking: [],
     totalVotes: 0,
-    clicksPerSecond: 0,
+    clicksPerMinute: 0,
     blockedClicks: 0,
     events: [],
   };
@@ -66,8 +66,14 @@ class WorldState {
   /** Arranca el bucle de sondeo (idempotente). */
   start(): void {
     if (this.timer) return;
-    void this.poll();
-    this.timer = setInterval(() => void this.poll(), config.stream.intervalMs);
+    // Solo consultamos DragonFly si hay ALGUIEN mirando. Sin espectadores el
+    // poller queda dormido (cero carga sobre la BD) y se despierta al primer
+    // suscriptor (ver `subscribe`) o ante una petición a `/api/ranking`
+    // (que llama a `refresh`). Con el patrón "todo internet o nadie", esto
+    // ahorra una lectura por segundo durante los ratos muertos.
+    this.timer = setInterval(() => {
+      if (this.subscribers.size > 0) void this.refresh();
+    }, config.stream.intervalMs);
     this.timer.unref?.();
   }
 
@@ -81,8 +87,12 @@ class WorldState {
    * devuelve una función para darse de baja.
    */
   subscribe(fn: Subscriber): () => void {
+    const wasIdle = this.subscribers.size === 0;
     this.subscribers.add(fn);
     if (this.payload) fn(this.payload);
+    // Primer espectador tras un rato inactivo: refrescamos ya para no
+    // servirle un snapshot viejo (o vacío) hasta el siguiente tick.
+    if (wasIdle) void this.refresh();
     return () => {
       this.subscribers.delete(fn);
     };
@@ -93,8 +103,12 @@ class WorldState {
     return this.subscribers.size;
   }
 
-  /** Consulta DragonFly, recompone el snapshot y difunde. */
-  private async poll(): Promise<void> {
+  /**
+   * Consulta DragonFly, recompone el snapshot y lo difunde. Público para que
+   * `/api/ranking` pueda forzar un refresco puntual aunque el poller esté
+   * dormido por no haber espectadores. El guard `polling` evita solapes.
+   */
+  async refresh(): Promise<void> {
     if (this.polling) return;
     this.polling = true;
     try {
@@ -107,7 +121,7 @@ class WorldState {
         ranking: world.ranking,
         totalVotes: world.totalVotes,
         blockedClicks: world.blockedClicks,
-        clicksPerSecond: world.clicksPerSecond,
+        clicksPerMinute: world.clicksPerMinute,
         events: this.events.slice(0, MAX_EVENTS),
       };
 

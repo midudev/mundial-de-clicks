@@ -36,7 +36,7 @@ export interface LiveEvent {
 export interface WorldSnapshot {
   ranking: RankingEntry[];
   totalVotes: number;
-  clicksPerSecond: number;
+  clicksPerMinute: number;
   blockedClicks: number;
   events: LiveEvent[];
 }

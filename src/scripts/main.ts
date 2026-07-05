@@ -1,6 +1,6 @@
 import type { WorldSnapshot } from '../lib/types';
 import { sendVotes } from './api';
-import { bump, reconcile } from './state';
+import { bump, reconcile, revert } from './state';
 import {
   renderStats,
   renderRanking,
@@ -122,6 +122,18 @@ async function flush(): Promise<void> {
       return;
     }
 
+    // Re-sincronización con la BD: el servidor es la autoridad. Todo voto
+    // del lote que NO haya contado (bloqueado por rate limit, o perdido por
+    // un error de red) se revierte del estado optimista. Sin esto, "Votos
+    // Totales" y el ranking quedan inflados para siempre, porque reconcile
+    // solo sube. `accepted` es 0 en rate_limited/error → se revierte el lote
+    // entero.
+    const reverted = revertUnaccepted(batch, res.accepted ?? 0);
+    if (reverted > 0) {
+      renderStats();
+      renderRanking();
+    }
+
     // Rate limit: cooldown para dejar de spamear la red.
     if (res.reason === 'rate_limited' && res.retryAfter) {
       cooldownUntil = Date.now() + res.retryAfter;
@@ -134,6 +146,28 @@ async function flush(): Promise<void> {
     sending = false;
     if (pending.size > 0) scheduleFlush(retryDelay || FLUSH_MS);
   }
+}
+
+/**
+ * Revierte del estado optimista los votos de un lote que el servidor no
+ * aceptó. Reparte `accepted` entre los países EN EL MISMO ORDEN en que el
+ * servidor consume el cupo (orden de inserción del lote, idéntico al ARGV
+ * del script Lua): los primeros países agotan el presupuesto y el resto
+ * queda bloqueado. Devuelve cuántos votos se revirtieron.
+ */
+function revertUnaccepted(batch: Map<string, number>, accepted: number): number {
+  let budget = accepted;
+  let reverted = 0;
+  for (const [code, requested] of batch) {
+    const ok = Math.min(requested, budget);
+    budget -= ok;
+    const blocked = requested - ok;
+    if (blocked > 0) {
+      revert(code, blocked);
+      reverted += blocked;
+    }
+  }
+  return reverted;
 }
 
 /** Actualiza el combo según el ritmo de clicks. */

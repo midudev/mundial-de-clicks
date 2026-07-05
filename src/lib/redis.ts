@@ -58,3 +58,41 @@ export async function getRedis(): Promise<RedisClientType> {
 
   return globalForRedis.__mundialRedisReady;
 }
+
+/**
+ * Envuelve una promesa con un timeout DURO.
+ *
+ * node-redis no aborta comandos individuales: si DragonFly se cuelga (una
+ * partición de red, un snapshot largo, un `SAVE` bloqueante), el `await`
+ * quedaría colgado para siempre. Eso es peligroso: en el endpoint de voto
+ * agota conexiones, y en el poller del WorldState deja el guard `polling`
+ * atascado y CONGELA el SSE de todos los espectadores. Aquí fallamos rápido
+ * y dejamos que la capa superior responda un error controlado y reintente.
+ *
+ * Nota: el comando subyacente puede completarse en el servidor más tarde;
+ * para nuestras operaciones (voto idempotente vía script, lecturas) eso es
+ * seguro: el siguiente snapshot reconcilia el estado real.
+ */
+export function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label = 'redis',
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${label}: timeout tras ${ms}ms`)),
+      ms,
+    );
+    timer.unref?.();
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}

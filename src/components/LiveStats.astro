@@ -13,7 +13,7 @@ const { snapshot } = Astro.props;
 
 const stats = [
   { key: 'total', label: 'Votos totales', value: snapshot.totalVotes, accent: 'text-white' },
-  { key: 'cps', label: 'Clicks / segundo', value: snapshot.clicksPerSecond, accent: 'text-neon' },
+  { key: 'cpm', label: 'Clicks / minuto', value: snapshot.clicksPerMinute, accent: 'text-neon' },
   { key: 'blocked', label: 'Clicks bloqueados', value: snapshot.blockedClicks, accent: 'text-danger' },
 ] as const;
 ---

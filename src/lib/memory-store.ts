@@ -20,8 +20,11 @@ let blockedClicks = 0;
 
 /** Rate limit por IP: ip -> { ventana, votos en esa ventana }. */
 const rateWindows = new Map<string, { window: number; count: number }>();
-/** Clicks por segundo: epochSecond -> votos. */
+/** Clicks por segundo: epochSecond -> votos. Se suman los 60 últimos. */
 const perSecond = new Map<number, number>();
+
+/** Segundos de la ventana deslizante para calcular los clicks/minuto. */
+const MINUTE_WINDOW = 60;
 
 /** Evita que los mapas efímeros crezcan sin límite bajo carga. */
 function prune(currentWindow: number, currentSecond: number): void {
@@ -30,8 +33,9 @@ function prune(currentWindow: number, currentSecond: number): void {
       if (entry.window < currentWindow) rateWindows.delete(ip);
     }
   }
+  // Conservamos la ventana completa de 60s que necesita el clicks/minuto.
   for (const second of perSecond.keys()) {
-    if (second < currentSecond - 5) perSecond.delete(second);
+    if (second < currentSecond - MINUTE_WINDOW) perSecond.delete(second);
   }
 }
 
@@ -92,13 +96,19 @@ export function readWorldMemory(): {
   ranking: RankingEntry[];
   totalVotes: number;
   blockedClicks: number;
-  clicksPerSecond: number;
+  clicksPerMinute: number;
 } {
-  const previousSecond = Math.floor(Date.now() / 1000) - 1;
+  // Ventana deslizante: sumamos los 60 segundos previos (excluyendo el
+  // segundo en curso, que aún se está llenando).
+  const nowSecond = Math.floor(Date.now() / 1000);
+  let clicksPerMinute = 0;
+  for (let i = 1; i <= MINUTE_WINDOW; i++) {
+    clicksPerMinute += perSecond.get(nowSecond - i) ?? 0;
+  }
   return {
     ranking: buildRanking(new Map(scores)),
     totalVotes,
     blockedClicks,
-    clicksPerSecond: perSecond.get(previousSecond) ?? 0,
+    clicksPerMinute,
   };
 }

@@ -32,10 +32,30 @@ export function getClientIp(request: Request, fallback = '0.0.0.0'): string {
       .filter(Boolean);
     if (parts.length > 0) {
       const index = Math.max(0, parts.length - hops);
-      return parts[index];
+      return sanitizeIp(parts[index], fallback);
     }
   }
 
   // Sin XFF (p.ej. en local sin proxy): x-real-ip o el fallback.
-  return request.headers.get('x-real-ip')?.trim() || fallback;
+  return sanitizeIp(request.headers.get('x-real-ip')?.trim() ?? '', fallback);
+}
+
+/**
+ * Normaliza la IP antes de usarla como parte de una clave de Redis
+ * (`rl:{ip}:{window}`).
+ *
+ * La IP procede de una cabecera controlable por quien esté delante: aunque
+ * detrás de nuestro proxy de confianza no es falseable, sí conviene ACOTARLA.
+ * Nos quedamos solo con caracteres válidos de IPv4/IPv6 y como mucho 45
+ * (longitud máxima de una IPv6). Así un `x-forwarded-for` gigante o con basura
+ * no puede generar claves enormes ni disparar el uso de memoria de DragonFly.
+ */
+function sanitizeIp(ip: string, fallback: string): string {
+  const value = ip.trim().slice(0, 45); // 45 = longitud máxima de una IPv6
+  const isIpv4 = /^(\d{1,3}\.){3}\d{1,3}$/.test(value);
+  const isIpv6 = value.includes(':') && /^[0-9a-fA-F:]+$/.test(value);
+  // Detrás del proxy de confianza esto ya es una IP real; si llega algo con
+  // otra forma (basura o intento de inyección) lo descartamos al fallback en
+  // vez de fabricar una clave de Redis rara.
+  return isIpv4 || isIpv6 ? value : fallback;
 }

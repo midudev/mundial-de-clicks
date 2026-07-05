@@ -31,6 +31,15 @@ export const config = {
      * En Coolify apuntará al nombre del servicio interno de DragonFly.
      */
     url: env('REDIS_URL', buildRedisUrl()),
+    /**
+     * Timeout DURO por comando (ms). Si DragonFly no responde a tiempo,
+     * fallamos rápido en vez de dejar la petición (o el poller) colgada.
+     */
+    commandTimeoutMs: envInt('REDIS_COMMAND_TIMEOUT_MS', 2000),
+  },
+  captchaHttp: {
+    /** Timeout (ms) del fetch de servidor a servidor contra el servidor Cap. */
+    timeoutMs: envInt('CAP_HTTP_TIMEOUT_MS', 5000),
   },
   rateLimit: {
     /** Máximo de clicks válidos por ventana y por IP. */
