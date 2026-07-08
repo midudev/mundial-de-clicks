@@ -32,11 +32,30 @@ const umamiWebsiteId = import.meta.env.PUBLIC_UMAMI_WEBSITE_ID;
     {
       umamiSrc && umamiWebsiteId && (
         <script
-          defer
           is:inline
-          src={umamiSrc}
-          data-website-id={umamiWebsiteId}
-        />
+          define:vars={{ umamiSrc, umamiWebsiteId }}
+        >
+          {`
+          // Cargamos Umami de forma totalmente asíncrona y fuera del camino
+          // crítico: si el servidor tarda o no responde, no bloquea ni retrasa
+          // el resto de scripts ni la interactividad de la página.
+          (function () {
+            function loadUmami() {
+              var s = document.createElement('script');
+              s.src = umamiSrc;
+              s.async = true;
+              s.setAttribute('data-website-id', umamiWebsiteId);
+              s.onerror = function () { s.remove(); };
+              document.head.appendChild(s);
+            }
+            if (document.readyState === 'complete') {
+              loadUmami();
+            } else {
+              window.addEventListener('load', loadUmami);
+            }
+          })();
+          `}
+        </script>
       )
     }
   </head>
