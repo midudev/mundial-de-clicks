@@ -1,15 +1,13 @@
 import type { APIRoute } from 'astro';
 import { getClientIp } from '../../lib/rate-limit';
-import { castVotes, type VoteOutcome } from '../../lib/votes';
+import { castVotes, type VoteSession } from '../../lib/votes';
 import { isValidCountry, COUNTRIES } from '../../lib/countries';
 import { hasCaptcha } from '../../lib/features';
 import {
   readCookie,
   sessionKey,
-  createSession,
-  sessionCookie,
-  validateToken,
   SESSION_COOKIE,
+  SESSION_TTL,
 } from '../../lib/captcha';
 import type { VoteResponse } from '../../lib/types';
 
@@ -21,22 +19,12 @@ const MAX_BATCH = 100;
 const MAX_KEYS = COUNTRIES.length;
 /** Tamaño máximo del body en bytes (el payload real es diminuto). */
 const MAX_BODY_BYTES = 2_048;
-/**
- * Tope de longitud del token de captcha. El token de Cap es `id:vertoken`
- * (~40 chars); cualquier cosa más larga es basura y no la reenviamos a Cap.
- */
-const MAX_TOKEN_LEN = 128;
 
-/**
- * Serializa la respuesta. `cookie`, si viene, se añade como `Set-Cookie`
- * (para entregar la sesión corta recién creada tras validar el captcha).
- */
-function json(body: VoteResponse, status: number, cookie?: string): Response {
-  const headers: Record<string, string> = {
-    'content-type': 'application/json',
-  };
-  if (cookie) headers['set-cookie'] = cookie;
-  return new Response(JSON.stringify(body), { status, headers });
+function json(body: VoteResponse, status: number): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
 }
 
 /**
@@ -102,19 +90,9 @@ export const POST: APIRoute = async ({ request }) => {
 
   // --- Validación de payload ----------------------------------------
   let rawVotes: Record<string, unknown>;
-  let captchaToken: string | undefined;
   try {
-    const body = JSON.parse(text) as {
-      votes?: Record<string, unknown>;
-      captchaToken?: unknown;
-    };
+    const body = JSON.parse(text) as { votes?: Record<string, unknown> };
     rawVotes = body.votes ?? {};
-    if (
-      typeof body.captchaToken === 'string' &&
-      body.captchaToken.length <= MAX_TOKEN_LEN
-    ) {
-      captchaToken = body.captchaToken;
-    }
   } catch {
     return json({ ok: false, reason: 'invalid_payload' }, 400);
   }
@@ -144,80 +122,53 @@ export const POST: APIRoute = async ({ request }) => {
   // Recorta el lote a un máximo razonable.
   total = Math.min(total, MAX_BATCH);
 
-  // --- Captcha + procesamiento atómico ------------------------------
-  // Con el captcha activo, cada voto necesita una sesión de captcha viva.
-  // La sesión se abre validando un TOKEN de Cap de UN SOLO USO y dura una
-  // ventana corta y NO renovable (ver captcha.ts). Estrategia:
-  //   1. Si la cookie trae una sesión viva → se vota (ruta caliente: 1 viaje
-  //      a DragonFly, sin tocar Cap). El script devuelve -1 si ya expiró.
-  //   2. Si no hay sesión viva → exigimos `captchaToken`, lo validamos contra
-  //      Cap (que lo consume) y, si es válido, abrimos una sesión nueva y
-  //      reintentamos. El primer intento del paso 1 NO gasta rate limit
-  //      cuando corta por sesión inválida, así que no hay doble cómputo.
+  // --- Captcha (solo si está activado) ------------------------------
+  // Si el captcha está off, no se exige sesión: se vota directamente.
+  let session: VoteSession | undefined;
+  if (hasCaptcha) {
+    const sessionId = readCookie(request, SESSION_COOKIE);
+    if (!sessionId) {
+      return json({ ok: false, reason: 'captcha_required' }, 403);
+    }
+    session = { key: sessionKey(sessionId), ttl: SESSION_TTL };
+  }
+
+  // --- Procesamiento atómico (sesión + rate limit + escritura) ------
   const ip = getClientIp(request);
-
-  // Cookie de sesión a entregar si abrimos una nueva en esta petición.
-  let newCookie: string | undefined;
-
+  let outcome;
   try {
-    let outcome: VoteOutcome | undefined;
-
-    if (!hasCaptcha) {
-      // Captcha desactivado: se vota sin sesión.
-      outcome = await castVotes(ip, votes, total);
-    } else {
-      // 1) Intento con la sesión de la cookie (si la hay).
-      const cookieId = readCookie(request, SESSION_COOKIE);
-      if (cookieId) {
-        outcome = await castVotes(ip, votes, total, {
-          key: sessionKey(cookieId),
-        });
-      }
-
-      // 2) Sin sesión viva → exigimos un token de captcha de un solo uso.
-      if (!outcome || !outcome.sessionValid) {
-        if (!captchaToken || !(await validateToken(captchaToken))) {
-          return json({ ok: false, reason: 'captcha_required' }, 403);
-        }
-        // Token válido y CONSUMIDO en Cap → ventana corta no renovable.
-        const id = await createSession();
-        newCookie = sessionCookie(id, false);
-        outcome = await castVotes(ip, votes, total, { key: sessionKey(id) });
-
-        // No debería fallar (la acabamos de crear), pero por si acaso.
-        if (!outcome.sessionValid) {
-          return json({ ok: false, reason: 'captcha_required' }, 403);
-        }
-      }
-    }
-
-    if (outcome.accepted === 0) {
-      return json(
-        {
-          ok: false,
-          reason: 'rate_limited',
-          accepted: 0,
-          blocked: outcome.blocked,
-          remaining: 0,
-          retryAfter: outcome.retryAfter,
-        },
-        429,
-        newCookie,
-      );
-    }
-
-    return json(
-      {
-        ok: true,
-        counts: outcome.counts,
-        accepted: outcome.accepted,
-        blocked: outcome.blocked,
-        remaining: outcome.remaining,
-      },
-      200,
-      newCookie,
-    );
+    outcome = await castVotes(ip, votes, total, session);
   } catch {
     return json({ ok: false, reason: 'error' }, 500);
   }
+
+  // La sesión no existe/expiró: hay que volver a pasar el captcha.
+  if (hasCaptcha && !outcome.sessionValid) {
+    return json({ ok: false, reason: 'captcha_required' }, 403);
+  }
+
+  if (outcome.accepted === 0) {
+    return json(
+      {
+        ok: false,
+        reason: 'rate_limited',
+        accepted: 0,
+        blocked: outcome.blocked,
+        remaining: 0,
+        retryAfter: outcome.retryAfter,
+      },
+      429,
+    );
+  }
+
+  return json(
+    {
+      ok: true,
+      counts: outcome.counts,
+      accepted: outcome.accepted,
+      blocked: outcome.blocked,
+      remaining: outcome.remaining,
+    },
+    200,
+  );
 };

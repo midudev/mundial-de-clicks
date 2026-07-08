@@ -58,23 +58,19 @@ export interface VoteOutcome {
  *   5. Devuelve [accepted, blocked, remaining, code, score, code, score...]
  *      o [-1] si no hay sesión de captcha válida.
  *
- * La sesión NO se renueva aquí: se creó con un TTL corto y fijo al validar
- * el token de captcha, y debe caducar aunque el usuario siga votando (así la
- * ventana es acotada y no renovable). Solo comprobamos que siga viva.
- *
  * KEYS: rl, ranking, total, cps, blocked, session
- * ARGV: cost, maxWin, winExpire, bucketExpire, requireSession,
+ * ARGV: cost, maxWin, winExpire, bucketExpire, sessionTtl, requireSession,
  *       [code, count]...
  */
 const VOTE_SCRIPT = `
 -- 0. Si el captcha está activo (requireSession=1) exigimos una sesión
---    válida; si no existe, cortamos con -1 (SIN tocar el rate limit). Con
---    captcha desactivado se salta esta comprobación por completo. No se
---    renueva el TTL: la ventana de sesión es corta y no renovable.
-if tonumber(ARGV[5]) == 1 then
+--    válida; si no existe, cortamos con -1. Con captcha desactivado se
+--    salta esta comprobación por completo.
+if tonumber(ARGV[6]) == 1 then
   if redis.call('EXISTS', KEYS[6]) == 0 then
     return {-1}
   end
+  redis.call('EXPIRE', KEYS[6], tonumber(ARGV[5]))
 end
 
 local cost = tonumber(ARGV[1])
@@ -94,7 +90,7 @@ local blocked = cost - allowed
 local budget = allowed
 local accepted = 0
 local out = {}
-local i = 6
+local i = 7
 while i < #ARGV do
   local code = ARGV[i]
   local cnt = tonumber(ARGV[i + 1])
@@ -169,8 +165,10 @@ async function runVoteScript(
 
 /** Sesión de captcha a verificar de forma atómica (si el captcha está on). */
 export interface VoteSession {
-  /** Clave de DragonFly de la sesión (solo se comprueba que exista). */
+  /** Clave de DragonFly de la sesión. */
   key: string;
+  /** TTL a renovar en cada voto (segundos). */
+  ttl: number;
 }
 
 /**
@@ -216,6 +214,7 @@ export async function castVotes(
     // TTL del bucket por segundo: debe cubrir toda la ventana de 60s que
     // se suma al leer, con un pequeño margen para no perder el borde.
     String(MINUTE_WINDOW + 10),
+    String(session?.ttl ?? 1),
     session ? '1' : '0', // requireSession
   ];
   for (const [code, count] of votes) {

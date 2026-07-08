@@ -14,8 +14,6 @@ import {
   checkSession,
   verifyInvisible,
   resetVerified,
-  markVerified,
-  takeToken,
   isVerified,
 } from './captcha';
 import { renderStatus } from './status';
@@ -56,6 +54,19 @@ let challengeThreshold = nextChallengeAt();
 // --- Estado del lote pendiente de envío ------------------------------
 const pending = new Map<string, number>();
 let flushTimer: number | null = null;
+
+// --- Backoff del captcha ---------------------------------------------
+// Si el captcha falla de forma persistente (backend caído, red bloqueada,
+// ruta mal configurada…) el servidor devuelve `captcha_required` una y otra
+// vez. SIN backoff, el cliente re-resolvería un PoW cada 300ms para siempre:
+// un loop infinito que funde CPU y hace parpadear el toast. Con esto, cada
+// fallo consecutivo espera el doble (hasta un tope) y se resetea al primer
+// éxito. Los votos NO se pierden: siguen en `pending` hasta que se acepten.
+let captchaFailures = 0;
+const CAPTCHA_BACKOFF_MAX_MS = 20_000;
+function captchaBackoff(): number {
+  return Math.min(400 * 2 ** captchaFailures, CAPTCHA_BACKOFF_MAX_MS);
+}
 
 // --- Estado del combo ------------------------------------------------
 let combo = 0;
@@ -99,20 +110,15 @@ async function flush(): Promise<void> {
   let retryDelay = 0;
 
   try {
-    // Captcha invisible: si no hay sesión viva, resolvemos un PoW en segundo
-    // plano (WASM precalentado) y obtenemos un token de UN SOLO USO para
-    // adjuntarlo al voto. Si falla, reintentamos sin perder votos.
-    let token: string | undefined;
+    // Captcha invisible: la 1ª vez resolvemos el PoW en segundo plano (con
+    // el WASM ya precalentado). Si falla, reintentamos sin perder votos.
     if (!isVerified()) {
       const ok = await verifyInvisible();
       if (!ok) {
-        retryDelay = 1500;
-        return;
-      }
-      token = takeToken() ?? undefined;
-      if (!token) {
-        // Resolvió pero no hay token: reintenta (los votos siguen en pending).
-        retryDelay = 1500;
+        // No se pudo resolver el PoW (challenge/redeem caídos o bloqueados):
+        // backoff para no martillear en bucle.
+        captchaFailures += 1;
+        retryDelay = captchaBackoff();
         return;
       }
     }
@@ -120,23 +126,24 @@ async function flush(): Promise<void> {
     const batch = new Map(pending);
     pending.clear();
 
-    const res = await sendVotes(batch, token);
+    const res = await sendVotes(batch);
 
-    // Sesión caducada/ausente en el servidor: reverificamos (nuevo PoW +
-    // token) y reencolamos el lote.
+    // Sesión caducada/ausente en el servidor: reverificamos y reencolamos el
+    // lote. Con backoff exponencial para no entrar en un loop apretado si el
+    // captcha está roto (backend inalcanzable, ruta mal, etc.).
     if (res.reason === 'captcha_required') {
       resetVerified();
       for (const [code, count] of batch) {
         pending.set(code, (pending.get(code) ?? 0) + count);
       }
-      retryDelay = 300;
+      captchaFailures += 1;
+      retryDelay = captchaBackoff();
       return;
     }
 
-    // El servidor procesó el lote con sesión válida (ok o rate_limited): la
-    // ventana de voto está abierta, así que los próximos lotes van sin token
-    // hasta que caduque (entonces el servidor pedirá captcha otra vez).
-    if (res.ok || res.reason === 'rate_limited') markVerified();
+    // Llegamos aquí = el captcha no fue el problema (voto procesado o rate
+    // limit). Reseteamos el contador de fallos.
+    if (res.ok || res.reason === 'rate_limited') captchaFailures = 0;
 
     // Re-sincronización con la BD: el servidor es la autoridad. Todo voto
     // del lote que NO haya contado (bloqueado por rate limit, o perdido por

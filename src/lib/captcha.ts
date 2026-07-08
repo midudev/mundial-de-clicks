@@ -11,20 +11,9 @@ import { config } from './config';
  *      /api/captcha/redeem. Nuestro backend hace de PROXY al servidor Cap
  *      (`CAP_API_URL/challenge` y `/redeem`): así el widget habla con
  *      nuestro mismo origen (HTTPS, sin CORS ni mixed-content) y el tráfico
- *      hacia Cap sale de servidor a servidor. El canje devuelve un TOKEN de
- *      verificación de Cap (formato `id:vertoken`).
- *   2. El cliente manda ese token a /api/vote. El endpoint lo VALIDA contra
- *      Cap (`CAP_API_URL/validate`), que lo CONSUME (un solo uso): un token
- *      no se puede reutilizar ni compartir. Si es válido, abrimos una SESIÓN
- *      corta y NO renovable (en DragonFly, con TTL) y la devolvemos como
- *      cookie. Dentro de esa ventana se vota sin re-resolver; al caducar, el
- *      cliente resuelve otro PoW invisible y manda un token nuevo.
- *
- * Por qué un token de un solo uso y NO una sesión larga: una sesión-cookie
- * reutilizable es un "bearer token" que un bot resuelve UNA vez y luego
- * comparte con toda la botnet (el servidor solo miraba que existiera). Con
- * validación de token de un solo uso, cada ventana de voto cuesta un PoW
- * fresco e intransferible: la botnet muere sin importar cuántas IPs tenga.
+ *      hacia Cap sale de servidor a servidor.
+ *   2. Si Cap valida el PoW, creamos una SESIÓN (en DragonFly, con TTL) y la
+ *      devolvemos como cookie. La API de votos exige esa sesión.
  *
  * Si `CAP_API_URL` no está definida, el captcha queda desactivado (ver
  * `hasCaptcha` en features.ts) y se vota sin él.
@@ -33,13 +22,13 @@ import { config } from './config';
 export const SESSION_PREFIX = 'cap:sess:';
 
 /**
- * Cookie de sesión y su duración. La ventana es CORTA y NO renovable a
- * propósito: acota a segundos el margen en que una cookie robada/compartida
- * serviría, y obliga a resolver un PoW fresco por ventana. El cliente
- * re-verifica de forma invisible cuando caduca.
+ * Cookie de sesión y su duración. Ventana CORTA (2 min) que se RENUEVA en
+ * cada voto: quien vota de forma continua no vuelve a ver el captcha, pero si
+ * deja de votar 2 minutos, la sesión caduca y hay que reverificar. Acota
+ * mucho el margen en que una cookie robada/compartida serviría (antes era 1h).
  */
 export const SESSION_COOKIE = 'cap_session';
-export const SESSION_TTL = 60; // 1 minuto (no se renueva)
+export const SESSION_TTL = 120; // 2 minutos (se renueva mientras se vota)
 
 /** URL base del servidor Cap (sin barra final), o '' si no está configurado. */
 export function capApiUrl(): string {
@@ -52,7 +41,7 @@ export function capApiUrl(): string {
  * endpoint los relaye al widget sin transformarlos.
  */
 export async function proxyToCap(
-  subpath: 'challenge' | 'redeem' | 'validate',
+  subpath: 'challenge' | 'redeem',
   body: unknown,
 ): Promise<{ status: number; data: unknown }> {
   const base = capApiUrl();
@@ -72,27 +61,6 @@ export async function proxyToCap(
     /* Cap siempre responde JSON; si no, dejamos data en null. */
   }
   return { status: res.status, data };
-}
-
-/**
- * Valida contra Cap un token de verificación (el que devuelve el canje).
- *
- * IMPORTANTE: es de UN SOLO USO. La validación en el servidor Cap CONSUME el
- * token (lo borra), así que no se puede reutilizar ni compartir entre bots.
- * Este es el pilar del anti-bot: cada ventana de voto exige un token fresco.
- *
- * Fail-closed: ante cualquier error (Cap caído, timeout, respuesta rara)
- * devolvemos `false`. Preferimos rechazar el voto (el cliente reintenta con
- * un token nuevo) a colar votos sin verificar.
- */
-export async function validateToken(token: string): Promise<boolean> {
-  if (!token || typeof token !== 'string') return false;
-  try {
-    const { status, data } = await proxyToCap('validate', { token });
-    return status === 200 && (data as { success?: boolean })?.success === true;
-  } catch {
-    return false;
-  }
 }
 
 /** Crea una sesión verificada en DragonFly y devuelve su id. */
