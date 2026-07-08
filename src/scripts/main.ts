@@ -14,6 +14,8 @@ import {
   checkSession,
   verifyInvisible,
   resetVerified,
+  markVerified,
+  takeToken,
   isVerified,
 } from './captcha';
 import { renderStatus } from './status';
@@ -97,11 +99,19 @@ async function flush(): Promise<void> {
   let retryDelay = 0;
 
   try {
-    // Captcha invisible: la 1ª vez resolvemos el PoW en segundo plano (con
-    // el WASM ya precalentado). Si falla, reintentamos sin perder votos.
+    // Captcha invisible: si no hay sesión viva, resolvemos un PoW en segundo
+    // plano (WASM precalentado) y obtenemos un token de UN SOLO USO para
+    // adjuntarlo al voto. Si falla, reintentamos sin perder votos.
+    let token: string | undefined;
     if (!isVerified()) {
       const ok = await verifyInvisible();
       if (!ok) {
+        retryDelay = 1500;
+        return;
+      }
+      token = takeToken() ?? undefined;
+      if (!token) {
+        // Resolvió pero no hay token: reintenta (los votos siguen en pending).
         retryDelay = 1500;
         return;
       }
@@ -110,9 +120,10 @@ async function flush(): Promise<void> {
     const batch = new Map(pending);
     pending.clear();
 
-    const res = await sendVotes(batch);
+    const res = await sendVotes(batch, token);
 
-    // Sesión caducada en el servidor: reverificamos y reencolamos el lote.
+    // Sesión caducada/ausente en el servidor: reverificamos (nuevo PoW +
+    // token) y reencolamos el lote.
     if (res.reason === 'captcha_required') {
       resetVerified();
       for (const [code, count] of batch) {
@@ -121,6 +132,11 @@ async function flush(): Promise<void> {
       retryDelay = 300;
       return;
     }
+
+    // El servidor procesó el lote con sesión válida (ok o rate_limited): la
+    // ventana de voto está abierta, así que los próximos lotes van sin token
+    // hasta que caduque (entonces el servidor pedirá captcha otra vez).
+    if (res.ok || res.reason === 'rate_limited') markVerified();
 
     // Re-sincronización con la BD: el servidor es la autoridad. Todo voto
     // del lote que NO haya contado (bloqueado por rate limit, o perdido por

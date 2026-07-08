@@ -42,10 +42,19 @@ export const config = {
     timeoutMs: envInt('CAP_HTTP_TIMEOUT_MS', 5000),
   },
   rateLimit: {
-    /** Máximo de clicks válidos por ventana y por IP. */
+    /**
+     * Máximo de clicks válidos por ventana y por IP. Con el default de 10 en
+     * una ventana de 1s → 10 clicks/s por IP: cómodo para un humano sin que se
+     * note el freno. NO es la defensa anti-botnet (de eso se encarga el captcha
+     * de un solo uso, que limita cuántas identidades existen); esto solo acota
+     * el ritmo POR IP.
+     */
     maxPerWindow: envInt('RATE_LIMIT_MAX', 10),
-    /** Duración de la ventana en segundos. */
-    windowSeconds: envInt('RATE_LIMIT_WINDOW', 2),
+    /**
+     * Duración de la ventana en segundos. 1s hace el limitado más suave (menos
+     * a ráfagas) que ventanas más largas para el mismo ritmo por segundo.
+     */
+    windowSeconds: envInt('RATE_LIMIT_WINDOW', 1),
     /**
      * Número de proxies de confianza entre el cliente y la app. Se usa
      * para leer la IP REAL de `x-forwarded-for` sin que el cliente la

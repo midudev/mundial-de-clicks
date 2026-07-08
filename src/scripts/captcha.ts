@@ -54,18 +54,40 @@ if (typeof window !== 'undefined') {
 }
 
 let required = true; // por defecto asumimos que hace falta
-let verified = false;
+// `hasSession`: creemos que el servidor tiene una sesión de voto viva. NO es
+// lo mismo que "resolví un PoW": la sesión solo existe DESPUÉS de que el
+// servidor valide (y consuma) un token en /api/vote. Como la ventana es corta
+// y no renovable, esto se pone a false cuando el servidor pide captcha.
+let hasSession = false;
+// Token de captcha de un solo uso, resuelto y listo para adjuntar al próximo
+// voto. Se limpia en cuanto se consume (`takeToken`).
+let pendingToken: string | null = null;
 let prewarmed = false;
 let verifyPromise: Promise<boolean> | null = null;
 
-/** ¿Puede votar? (true si el captcha está off o ya está verificado). */
+/** ¿Puede votar sin adjuntar token? (captcha off o sesión viva). */
 export function isVerified(): boolean {
-  return !required || verified;
+  return !required || hasSession;
 }
 
-/** Marca como no verificado (p.ej. si la sesión caducó en el servidor). */
+/** El servidor aceptó un voto → hay sesión viva. */
+export function markVerified(): void {
+  hasSession = true;
+}
+
+/** Marca que no hay sesión (p.ej. el servidor pidió captcha de nuevo). */
 export function resetVerified(): void {
-  verified = false;
+  hasSession = false;
+}
+
+/**
+ * Entrega el token de un solo uso pendiente (y lo limpia). El llamador lo
+ * adjunta al voto; una vez enviado, no se puede reutilizar.
+ */
+export function takeToken(): string | null {
+  const t = pendingToken;
+  pendingToken = null;
+  return t;
 }
 
 /**
@@ -77,11 +99,11 @@ export async function checkSession(): Promise<void> {
     const res = await fetch('/api/captcha/session');
     const data = (await res.json()) as { required?: boolean; valid?: boolean };
     required = data.required !== false;
-    if (required && data.valid) verified = true;
+    if (required && data.valid) hasSession = true;
   } catch {
     // Si falla, asumimos que hace falta y se verificará al votar.
   }
-  if (required && !verified) void prewarm();
+  if (required && !hasSession) void prewarm();
 }
 
 /** Descarga el widget y calienta la caché del WASM/pako (no resuelve nada). */
@@ -100,11 +122,13 @@ async function prewarm(): Promise<void> {
 }
 
 /**
- * Verifica de forma INVISIBLE (PoW en segundo plano). Idempotente: si ya
- * hay una verificación en marcha, reutiliza la misma promesa.
+ * Asegura de forma INVISIBLE que hay un token de un solo uso listo para
+ * adjuntar al próximo voto (PoW en segundo plano). Idempotente: si ya hay
+ * sesión, o ya hay un token pendiente, o una resolución en marcha, no
+ * resuelve otro PoW. Devuelve true si se puede votar (sesión o token listo).
  */
 export function verifyInvisible(): Promise<boolean> {
-  if (isVerified()) return Promise.resolve(true);
+  if (isVerified() || pendingToken) return Promise.resolve(true);
   if (verifyPromise) return verifyPromise;
 
   verifyPromise = solve().finally(() => {
@@ -113,6 +137,10 @@ export function verifyInvisible(): Promise<boolean> {
   return verifyPromise;
 }
 
+/**
+ * Resuelve el PoW y guarda el token resultante en `pendingToken`. NO marca
+ * sesión: la sesión solo existe cuando el servidor valida el token al votar.
+ */
 async function solve(): Promise<boolean> {
   showToast();
   try {
@@ -121,8 +149,9 @@ async function solve(): Promise<boolean> {
     if (!Ctor) return false;
 
     const cap = new Ctor({ apiEndpoint: API_ENDPOINT });
-    await cap.solve(); // challenge + PoW + redeem (deja la cookie de sesión)
-    verified = true;
+    const res = await cap.solve(); // challenge + PoW + redeem → token
+    if (!res?.token) return false;
+    pendingToken = res.token;
     return true;
   } catch {
     return false;
