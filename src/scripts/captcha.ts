@@ -25,6 +25,7 @@ interface CapCtor {
 interface CapWindow {
   CAP_CUSTOM_WASM_URL?: string;
   CAP_PAKO_URL?: string;
+  CAP_CUSTOM_FETCH?: (url: string, opts?: RequestInit) => Promise<Response>;
   Cap?: CapCtor;
 }
 function capWindow(): CapWindow {
@@ -36,6 +37,20 @@ if (typeof window !== 'undefined') {
   const w = capWindow();
   w.CAP_CUSTOM_WASM_URL = WASM_URL;
   w.CAP_PAKO_URL = PAKO_URL;
+
+  // Fetch propio para las peticiones del widget: fuerza `Content-Type:
+  // application/json`. El challenge iba SIN content-type, y el navegador lo
+  // manda como `text/plain`, uno de los tipos que dispara la protección CSRF
+  // `checkOrigin` de Astro (que además falla tras el proxy inverso porque el
+  // `Origin` https no coincide con el `url.origin` http interno) → 403.
+  // Con JSON, Astro exime la comprobación cross-origin y el reto pasa a 200,
+  // manteniendo la CSRF activa para el resto de la app. `apiEndpoint` se pasa
+  // por config, así que definir este fetch NO cambia la ruta del widget.
+  w.CAP_CUSTOM_FETCH = (url, opts = {}) =>
+    fetch(url, {
+      ...opts,
+      headers: { 'Content-Type': 'application/json', ...(opts.headers ?? {}) },
+    });
 }
 
 let required = true; // por defecto asumimos que hace falta
