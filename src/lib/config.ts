@@ -43,13 +43,13 @@ export const config = {
   },
   rateLimit: {
     /**
-     * Máximo de clicks válidos por ventana y por IP. Con el default de 10 en
-     * una ventana de 1s → 10 clicks/s por IP: cómodo para un humano sin que se
-     * note el freno. NO es la defensa anti-botnet (de eso se encarga el captcha
+     * Máximo de clicks válidos por ventana y por IP. Con el default de 5 en
+     * una ventana de 1s → 5 clicks/s por IP: cómodo para un humano sin que se
+     * note demasiado el freno. NO es la defensa anti-botnet (de eso se encarga el captcha
      * de un solo uso, que limita cuántas identidades existen); esto solo acota
      * el ritmo POR IP.
      */
-    maxPerWindow: envInt('RATE_LIMIT_MAX', 10),
+    maxPerWindow: envInt('RATE_LIMIT_MAX', 5),
     /**
      * Duración de la ventana en segundos. 1s hace el limitado más suave (menos
      * a ráfagas) que ventanas más largas para el mismo ritmo por segundo.
@@ -77,7 +77,7 @@ export const config = {
      * otro reto. Evita que una cookie verificada sea barra libre durante todo
      * su TTL.
      */
-    votesPerSession: envInt('CAP_VOTES_PER_SESSION', 80),
+    votesPerSession: envInt('CAP_VOTES_PER_SESSION', 10),
     /** Duración máxima de una sesión de captcha, en segundos. */
     sessionTtlSeconds: envInt('CAP_SESSION_TTL_SECONDS', 120),
   },
