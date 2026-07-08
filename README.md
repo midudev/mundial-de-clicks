@@ -113,10 +113,13 @@ servicio (p.ej. `dragonfly`).
 | Variable       | Valor de ejemplo            | Obligatoria |
 | :------------- | :-------------------------- | :---------- |
 | `REDIS_URL`    | `redis://dragonfly:6379`    | ✅ Sí       |
+| `CAP_API_URL`  | `https://cap.tudominio.com/site-key` | ✅ Sí para captcha |
 | `HOST`         | `0.0.0.0`                   | ✅ Sí       |
 | `PORT`         | `4321`                      | Recomendada |
 | `RATE_LIMIT_MAX` | `15`                      | No          |
 | `RATE_LIMIT_WINDOW` | `1`                    | No          |
+| `CAP_VOTES_PER_SESSION` | `80`             | No          |
+| `CAP_SESSION_TTL_SECONDS` | `120`          | No          |
 | `STREAM_INTERVAL_MS` | `1000`                | No          |
 
 ### 3. Umami (analytics)

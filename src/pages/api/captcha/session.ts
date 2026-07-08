@@ -1,5 +1,10 @@
 import type { APIRoute } from 'astro';
-import { readCookie, isSessionValid, SESSION_COOKIE } from '../../../lib/captcha';
+import {
+  readCookie,
+  isSessionValid,
+  SESSION_COOKIE,
+  captchaFingerprint,
+} from '../../../lib/captcha';
 import { hasCaptcha } from '../../../lib/features';
 
 export const prerender = false;
@@ -18,7 +23,7 @@ export const GET: APIRoute = async ({ request }) => {
   let valid = !required;
   if (required) {
     try {
-      valid = await isSessionValid(id);
+      valid = await isSessionValid(id, captchaFingerprint(request));
     } catch {
       valid = false;
     }

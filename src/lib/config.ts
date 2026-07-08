@@ -72,6 +72,14 @@ export const config = {
      * widget, sin CORS ni mixed-content).
      */
     apiUrl: env('CAP_API_URL', '').replace(/\/+$/, ''),
+    /**
+     * Cuántos votos acepta una sesión de captcha antes de obligar a resolver
+     * otro reto. Evita que una cookie verificada sea barra libre durante todo
+     * su TTL.
+     */
+    votesPerSession: envInt('CAP_VOTES_PER_SESSION', 80),
+    /** Duración máxima de una sesión de captcha, en segundos. */
+    sessionTtlSeconds: envInt('CAP_SESSION_TTL_SECONDS', 120),
   },
   stream: {
     /** Intervalo en ms entre snapshots enviados por SSE. */

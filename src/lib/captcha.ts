@@ -1,6 +1,7 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { getRedis, withTimeout } from './redis';
 import { config } from './config';
+import { getClientIp } from './rate-limit';
 
 /**
  * Captcha con Cap (proof-of-work) usando un servidor Cap STANDALONE
@@ -13,22 +14,25 @@ import { config } from './config';
  *      nuestro mismo origen (HTTPS, sin CORS ni mixed-content) y el tráfico
  *      hacia Cap sale de servidor a servidor.
  *   2. Si Cap valida el PoW, creamos una SESIÓN (en DragonFly, con TTL) y la
- *      devolvemos como cookie. La API de votos exige esa sesión.
+ *      devolvemos como cookie. La API de votos exige esa sesión, la ata al
+ *      mismo fingerprint y consume una cuota corta de votos.
  *
  * Si `CAP_API_URL` no está definida, el captcha queda desactivado (ver
  * `hasCaptcha` en features.ts) y se vota sin él.
  */
 
 export const SESSION_PREFIX = 'cap:sess:';
+export const SESSION_FINGERPRINT_PREFIX = 'cap:sess-fp:';
 
 /**
  * Cookie de sesión y su duración. Ventana CORTA (2 min) que se RENUEVA en
- * cada voto: quien vota de forma continua no vuelve a ver el captcha, pero si
- * deja de votar 2 minutos, la sesión caduca y hay que reverificar. Acota
- * mucho el margen en que una cookie robada/compartida serviría (antes era 1h).
+ * cada voto aceptado: quien vota de forma continua no ve el captcha en cada
+ * click, pero la sesión caduca por tiempo o al agotar la cuota. Acota mucho el
+ * margen en que una cookie robada/compartida serviría.
  */
 export const SESSION_COOKIE = 'cap_session';
-export const SESSION_TTL = 120; // 2 minutos (se renueva mientras se vota)
+export const SESSION_TTL = Math.max(30, config.captcha.sessionTtlSeconds);
+export const SESSION_VOTE_QUOTA = Math.max(1, config.captcha.votesPerSession);
 
 /** URL base del servidor Cap (sin barra final), o '' si no está configurado. */
 export function capApiUrl(): string {
@@ -63,12 +67,25 @@ export async function proxyToCap(
   return { status: res.status, data };
 }
 
+/** Fingerprint estable para atar la sesión al cliente que resolvió el reto. */
+export function captchaFingerprint(request: Request): string {
+  const ip = getClientIp(request);
+  const userAgent = request.headers.get('user-agent') ?? '';
+  return createHash('sha256').update(`${ip}\n${userAgent}`).digest('hex');
+}
+
 /** Crea una sesión verificada en DragonFly y devuelve su id. */
-export async function createSession(): Promise<string> {
+export async function createSession(fingerprint: string): Promise<string> {
   const redis = await getRedis();
   const id = randomUUID();
+  const sessionKey = SESSION_PREFIX + id;
+  const fingerprintKey = SESSION_FINGERPRINT_PREFIX + id;
+  const multi = redis
+    .multi()
+    .set(sessionKey, String(SESSION_VOTE_QUOTA), { EX: SESSION_TTL })
+    .set(fingerprintKey, fingerprint, { EX: SESSION_TTL });
   await withTimeout(
-    redis.set(SESSION_PREFIX + id, '1', { EX: SESSION_TTL }),
+    multi.exec(),
     config.redis.commandTimeoutMs,
     'captcha/createSession',
   );
@@ -80,16 +97,27 @@ export function sessionKey(id: string): string {
   return SESSION_PREFIX + id;
 }
 
+/** Clave de fingerprint de una sesión (para el script de votos). */
+export function sessionFingerprintKey(id: string): string {
+  return SESSION_FINGERPRINT_PREFIX + id;
+}
+
 /** Comprueba si una sesión sigue viva. */
-export async function isSessionValid(id: string): Promise<boolean> {
-  if (!id) return false;
+export async function isSessionValid(
+  id: string,
+  fingerprint = '',
+): Promise<boolean> {
+  if (!id || !fingerprint) return false;
   const redis = await getRedis();
-  const exists = await withTimeout(
-    redis.exists(SESSION_PREFIX + id),
+  const [remaining, storedFingerprint] = await withTimeout(
+    redis.mGet([SESSION_PREFIX + id, SESSION_FINGERPRINT_PREFIX + id]),
     config.redis.commandTimeoutMs,
     'captcha/isSessionValid',
   );
-  return exists === 1;
+  return (
+    storedFingerprint === fingerprint &&
+    Number.parseInt(remaining ?? '0', 10) > 0
+  );
 }
 
 /** Lee una cookie del header `cookie` de una petición. */

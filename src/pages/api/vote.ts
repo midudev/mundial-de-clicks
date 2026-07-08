@@ -6,6 +6,8 @@ import { hasCaptcha } from '../../lib/features';
 import {
   readCookie,
   sessionKey,
+  sessionFingerprintKey,
+  captchaFingerprint,
   SESSION_COOKIE,
   SESSION_TTL,
 } from '../../lib/captcha';
@@ -130,7 +132,12 @@ export const POST: APIRoute = async ({ request }) => {
     if (!sessionId) {
       return json({ ok: false, reason: 'captcha_required' }, 403);
     }
-    session = { key: sessionKey(sessionId), ttl: SESSION_TTL };
+    session = {
+      key: sessionKey(sessionId),
+      fingerprintKey: sessionFingerprintKey(sessionId),
+      fingerprint: captchaFingerprint(request),
+      ttl: SESSION_TTL,
+    };
   }
 
   // --- Procesamiento atómico (sesión + rate limit + escritura) ------

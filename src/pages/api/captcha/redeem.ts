@@ -1,5 +1,10 @@
 import type { APIRoute } from 'astro';
-import { proxyToCap, createSession, sessionCookie } from '../../../lib/captcha';
+import {
+  proxyToCap,
+  createSession,
+  sessionCookie,
+  captchaFingerprint,
+} from '../../../lib/captcha';
 import { hasCaptcha } from '../../../lib/features';
 
 export const prerender = false;
@@ -48,7 +53,7 @@ export const POST: APIRoute = async ({ request }) => {
   // Cookie SIN `Secure`: la app se sirve por http:// (sslip.io sin TLS) y los
   // navegadores descartan cookies Secure sobre HTTP. Si algún día se sirve por
   // HTTPS, se puede volver a poner `import.meta.env.PROD`.
-  const id = await createSession();
+  const id = await createSession(captchaFingerprint(request));
   const cookie = sessionCookie(id, false);
 
   return new Response(JSON.stringify(data), {

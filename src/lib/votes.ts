@@ -49,7 +49,8 @@ export interface VoteOutcome {
 
 /**
  * Script Lua atómico. Hace, en el servidor y de una sola vez:
- *   0. Comprueba que exista la SESIÓN de captcha (si no, corta con -1).
+ *   0. Comprueba que exista la SESIÓN de captcha, que pertenezca al mismo
+ *      fingerprint y que aún tenga cuota (si no, corta con -1).
  *   1. INCRBY de la ventana de rate limit + EXPIRE.
  *   2. Calcula cuántos votos caben (allowed) y cuántos se bloquean.
  *   3. ZINCRBY por país (repartiendo el cupo permitido en orden).
@@ -58,22 +59,29 @@ export interface VoteOutcome {
  *   5. Devuelve [accepted, blocked, remaining, code, score, code, score...]
  *      o [-1] si no hay sesión de captcha válida.
  *
- * KEYS: rl, ranking, total, cps, blocked, session
+ * KEYS: rl, ranking, total, cps, blocked, session, sessionFingerprint
  * ARGV: cost, maxWin, winExpire, bucketExpire, sessionTtl, requireSession,
- *       [code, count]...
+ *       fingerprint, [code, count]...
  */
 const VOTE_SCRIPT = `
 -- 0. Si el captcha está activo (requireSession=1) exigimos una sesión
---    válida; si no existe, cortamos con -1. Con captcha desactivado se
+--    válida, ligada a este cliente y con cuota. Con captcha desactivado se
 --    salta esta comprobación por completo.
+local requestedCost = tonumber(ARGV[1])
+local sessionQuota = requestedCost
 if tonumber(ARGV[6]) == 1 then
-  if redis.call('EXISTS', KEYS[6]) == 0 then
+  local storedFingerprint = redis.call('GET', KEYS[7])
+  if storedFingerprint ~= ARGV[7] then
     return {-1}
   end
-  redis.call('EXPIRE', KEYS[6], tonumber(ARGV[5]))
+  sessionQuota = tonumber(redis.call('GET', KEYS[6]) or '0')
+  if sessionQuota <= 0 then
+    return {-1}
+  end
 end
 
-local cost = tonumber(ARGV[1])
+local cost = requestedCost
+if cost > sessionQuota then cost = sessionQuota end
 local maxWin = tonumber(ARGV[2])
 local winExp = tonumber(ARGV[3])
 local bucketExp = tonumber(ARGV[4])
@@ -85,12 +93,12 @@ local freeBefore = maxWin - (countAfter - cost)
 if freeBefore < 0 then freeBefore = 0 end
 local allowed = cost
 if allowed > freeBefore then allowed = freeBefore end
-local blocked = cost - allowed
+local blocked = requestedCost - allowed
 
 local budget = allowed
 local accepted = 0
 local out = {}
-local i = 7
+local i = 8
 while i < #ARGV do
   local code = ARGV[i]
   local cnt = tonumber(ARGV[i + 1])
@@ -113,6 +121,16 @@ if accepted > 0 then
 end
 if blocked > 0 then
   redis.call('INCRBY', KEYS[5], blocked)
+end
+if tonumber(ARGV[6]) == 1 and accepted > 0 then
+  local remainingCaptcha = redis.call('DECRBY', KEYS[6], accepted)
+  if remainingCaptcha <= 0 then
+    redis.call('DEL', KEYS[6])
+    redis.call('DEL', KEYS[7])
+  else
+    redis.call('EXPIRE', KEYS[6], tonumber(ARGV[5]))
+    redis.call('EXPIRE', KEYS[7], tonumber(ARGV[5]))
+  end
 end
 
 local remaining = maxWin - countAfter
@@ -167,6 +185,10 @@ async function runVoteScript(
 export interface VoteSession {
   /** Clave de DragonFly de la sesión. */
   key: string;
+  /** Clave con el fingerprint que creó la sesión. */
+  fingerprintKey: string;
+  /** Fingerprint calculado para la petición actual. */
+  fingerprint: string;
   /** TTL a renovar en cada voto (segundos). */
   ttl: number;
 }
@@ -205,6 +227,7 @@ export async function castVotes(
     BLOCKED_KEY,
     // Con captcha off, KEYS[6] no se toca; un placeholder es suficiente.
     session?.key ?? 'session:__none__',
+    session?.fingerprintKey ?? 'session-fp:__none__',
   ];
 
   const args = [
@@ -216,6 +239,7 @@ export async function castVotes(
     String(MINUTE_WINDOW + 10),
     String(session?.ttl ?? 1),
     session ? '1' : '0', // requireSession
+    session?.fingerprint ?? '',
   ];
   for (const [code, count] of votes) {
     args.push(code, String(count));
