@@ -11,10 +11,18 @@ import { config } from './config';
 /**
  * Extrae la IP del cliente de forma RESISTENTE A SPOOFING.
  *
- * `x-forwarded-for` tiene la forma "cliente, proxy1, proxy2". El cliente
- * puede FALSEAR las primeras entradas (mandando su propia cabecera), así
- * que NO nos fiamos de la primera. La entrada fiable es la que añadió
- * nuestro propio proxy de confianza, contando desde el final:
+ * Detrás de Cloudflare la fuente fiable es `cf-connecting-ip`: la pone el
+ * edge de Cloudflare con la IP REAL del cliente, ya normalizada y sin
+ * saltos que contar. El cliente no la puede falsear MIENTRAS el origen solo
+ * acepte tráfico de Cloudflare (si el origen es accesible directamente,
+ * cualquiera podría mandar esta cabecera; asegúrate de restringir el acceso
+ * a las IPs de Cloudflare en el proxy/WAF).
+ *
+ * Si no hay Cloudflare delante caemos a `x-forwarded-for`, que tiene la forma
+ * "cliente, proxy1, proxy2". El cliente puede FALSEAR las primeras entradas
+ * (mandando su propia cabecera), así que NO nos fiamos de la primera. La
+ * entrada fiable es la que añadió nuestro propio proxy de confianza, contando
+ * desde el final:
  *
  *   parts[length - trustedProxyHops]
  *
@@ -22,6 +30,13 @@ import { config } from './config';
  * que Traefik observó, que el cliente no puede falsificar.
  */
 export function getClientIp(request: Request, fallback = '0.0.0.0'): string {
+  // Cloudflare: IP real del cliente, puesta por el edge. Es la fuente
+  // preferente cuando estamos detrás de Cloudflare.
+  const cfIp = request.headers.get('cf-connecting-ip')?.trim();
+  if (cfIp) {
+    return sanitizeIp(cfIp, fallback);
+  }
+
   const hops = Math.max(1, config.rateLimit.trustedProxyHops);
   const xff = request.headers.get('x-forwarded-for');
 
