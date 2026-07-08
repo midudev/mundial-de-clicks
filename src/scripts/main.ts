@@ -38,6 +38,7 @@ import { renderStatus } from './status';
 // se ve al instante), esta espera no se nota.
 const FLUSH_MS = 400; // duración de la ventana de agrupado
 const MAX_SEND_BATCH = 10; // debe mantenerse alineado con /api/vote
+const MAX_SEND_COUNTRIES = 3; // debe mantenerse alineado con /api/vote
 const COMBO_WINDOW_MS = 700; // ventana para encadenar combo
 
 // Retos: en vez de un número fijo, un intervalo ALEATORIO de votos entre
@@ -92,12 +93,12 @@ function queueVote(code: string): void {
 }
 
 /** Extrae del acumulado un lote acotado, dejando el resto para otro envío. */
-function takePendingBatch(maxVotes: number): Map<string, number> {
+function takePendingBatch(maxVotes: number, maxCountries: number): Map<string, number> {
   const batch = new Map<string, number>();
   let remaining = maxVotes;
 
   for (const [code, count] of Array.from(pending)) {
-    if (remaining <= 0) break;
+    if (remaining <= 0 || batch.size >= maxCountries) break;
     const take = Math.min(count, remaining);
     batch.set(code, take);
     remaining -= take;
@@ -145,7 +146,7 @@ async function flush(): Promise<void> {
       }
     }
 
-    const batch = takePendingBatch(MAX_SEND_BATCH);
+    const batch = takePendingBatch(MAX_SEND_BATCH, MAX_SEND_COUNTRIES);
 
     const res = await sendVotes(batch);
 

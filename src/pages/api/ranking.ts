@@ -1,5 +1,6 @@
 import type { APIRoute } from 'astro';
 import { getWorldState } from '../../lib/world-state';
+import { config } from '../../lib/config';
 
 export const prerender = false;
 
@@ -15,7 +16,7 @@ export const GET: APIRoute = async () => {
   // Fuerza una lectura fresca: si no hay espectadores SSE, el poller está
   // dormido y el snapshot podría estar viejo. `refresh` respeta su propio
   // timeout y guard, así que es barato y seguro.
-  await world.refresh();
+  await world.refreshIfStale(config.ranking.minRefreshMs);
   const snapshot = world.getSnapshot();
   return new Response(JSON.stringify(snapshot), {
     status: 200,

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { getRedis, withTimeout } from './redis';
 import { config } from './config';
-import { getClientIp } from './rate-limit';
+import { getTrustedClientIp } from './rate-limit';
 
 /**
  * Captcha con Cap (proof-of-work) usando un servidor Cap STANDALONE
@@ -32,7 +32,10 @@ export const SESSION_FINGERPRINT_PREFIX = 'cap:sess-fp:';
  */
 export const SESSION_COOKIE = 'cap_session';
 export const SESSION_TTL = Math.max(30, config.captcha.sessionTtlSeconds);
-export const SESSION_VOTE_QUOTA = Math.max(1, config.captcha.votesPerSession);
+export const SESSION_VOTE_QUOTA = Math.max(
+  1,
+  Math.min(config.captcha.votesPerSession, config.captcha.hardVotesPerSession),
+);
 
 /** URL base del servidor Cap (sin barra final), o '' si no está configurado. */
 export function capApiUrl(): string {
@@ -67,9 +70,13 @@ export async function proxyToCap(
   return { status: res.status, data };
 }
 
-/** Fingerprint estable para atar la sesión al cliente que resolvió el reto. */
-export function captchaFingerprint(request: Request): string {
-  const ip = getClientIp(request);
+/**
+ * Fingerprint estable para atar la sesión al cliente que resolvió el reto.
+ * En producción usa solo CF-Connecting-IP; nunca X-Forwarded-For.
+ */
+export function captchaFingerprint(request: Request): string | null {
+  const ip = getTrustedClientIp(request);
+  if (!ip) return null;
   const userAgent = request.headers.get('user-agent') ?? '';
   return createHash('sha256').update(`${ip}\n${userAgent}`).digest('hex');
 }

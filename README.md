@@ -118,9 +118,25 @@ servicio (p.ej. `dragonfly`).
 | `PORT`         | `4321`                      | Recomendada |
 | `RATE_LIMIT_MAX` | `5`                       | No          |
 | `RATE_LIMIT_WINDOW` | `1`                    | No          |
-| `CAP_VOTES_PER_SESSION` | `10`             | No          |
+| `CAP_VOTES_PER_SESSION` | `50`             | No          |
+| `CAP_SESSION_HARD_VOTE_CAP` | `50`          | No          |
 | `CAP_SESSION_TTL_SECONDS` | `120`          | No          |
+| `CAP_CHALLENGE_MAX_PER_MINUTE` | `6`       | No          |
+| `CAP_REDEEM_MAX_PER_MINUTE` | `12`         | No          |
+| `CAP_CHALLENGE_DIFFICULTY_BASE` | `4`      | No          |
+| `CAP_CHALLENGE_DIFFICULTY_MAX` | `8`       | No          |
+| `CAP_CHALLENGE_DIFFICULTY_STEP_VOTES` | `250` | No       |
+| `DAILY_VOTE_MAX_PER_IP` | `2000`           | No          |
 | `STREAM_INTERVAL_MS` | `1000`                | No          |
+| `MAX_SSE_CONNECTIONS_PER_IP` | `4`         | No          |
+| `RANKING_MIN_REFRESH_MS` | `750`            | No          |
+| `ORIGIN_GUARD_SECRET` | `secreto-largo`     | Recomendada |
+
+En producción, la sesión Cap y el rate limit se atan a `CF-Connecting-IP`.
+El origen debe aceptar tráfico solo desde Cloudflare y el proxy debe reenviar
+esa cabecera; `X-Forwarded-For` no se usa como fuente de IP fiable. Si defines
+`ORIGIN_GUARD_SECRET`, configura Cloudflare para añadir `x-origin-guard` con
+ese valor en las peticiones al origen.
 
 ### 3. Umami (analytics)
 

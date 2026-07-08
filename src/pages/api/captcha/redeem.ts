@@ -6,6 +6,9 @@ import {
   captchaFingerprint,
 } from '../../../lib/captcha';
 import { hasCaptcha } from '../../../lib/features';
+import { consumeAbuseLimit } from '../../../lib/abuse-limit';
+import { config } from '../../../lib/config';
+import { getTrustedClientIp } from '../../../lib/rate-limit';
 
 export const prerender = false;
 
@@ -25,6 +28,36 @@ function json(body: unknown, status: number): Response {
 export const POST: APIRoute = async ({ request }) => {
   if (!hasCaptcha) {
     return json({ success: false, error: 'captcha_disabled' }, 404);
+  }
+
+  const fingerprint = captchaFingerprint(request);
+  if (!fingerprint) {
+    return json({ success: false, error: 'trusted_ip_required' }, 403);
+  }
+  const ip = getTrustedClientIp(request);
+  if (!ip) {
+    return json({ success: false, error: 'trusted_ip_required' }, 403);
+  }
+
+  try {
+    const limit = await consumeAbuseLimit(
+      'captcha:redeem',
+      ip,
+      config.captcha.redeemMaxPerMinute,
+      60,
+    );
+    if (!limit.allowed) {
+      return new Response(JSON.stringify({ success: false, error: 'rate_limited' }), {
+        status: 429,
+        headers: {
+          'content-type': 'application/json',
+          'cache-control': 'no-store',
+          'retry-after': String(Math.ceil(limit.retryAfter / 1000)),
+        },
+      });
+    }
+  } catch {
+    return json({ success: false, error: 'rate_limit_unavailable' }, 503);
   }
 
   let body: unknown;
@@ -53,7 +86,7 @@ export const POST: APIRoute = async ({ request }) => {
   // Cookie SIN `Secure`: la app se sirve por http:// (sslip.io sin TLS) y los
   // navegadores descartan cookies Secure sobre HTTP. Si algún día se sirve por
   // HTTPS, se puede volver a poner `import.meta.env.PROD`.
-  const id = await createSession(captchaFingerprint(request));
+  const id = await createSession(fingerprint);
   const cookie = sessionCookie(id, false);
 
   return new Response(JSON.stringify(data), {

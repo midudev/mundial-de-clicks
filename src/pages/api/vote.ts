@@ -1,7 +1,7 @@
 import type { APIRoute } from 'astro';
 import { getClientIp } from '../../lib/rate-limit';
 import { castVotes, type VoteSession } from '../../lib/votes';
-import { isValidCountry, COUNTRIES } from '../../lib/countries';
+import { isValidCountry } from '../../lib/countries';
 import { hasCaptcha } from '../../lib/features';
 import {
   readCookie,
@@ -17,8 +17,8 @@ export const prerender = false;
 
 /** Máximo de votos que aceptamos en una sola petición (anti-abuso). */
 const MAX_BATCH = 10;
-/** Máximo de claves distintas que miramos (nunca más que países). */
-const MAX_KEYS = COUNTRIES.length;
+/** Máximo de países distintos que aceptamos en una sola petición. */
+const MAX_COUNTRIES_PER_BATCH = 3;
 /** Tamaño máximo del body en bytes (el payload real es diminuto). */
 const MAX_BODY_BYTES = 2_048;
 
@@ -83,6 +83,10 @@ async function readBodyLimited(
  * escribir— se hace en una única operación atómica en DragonFly.
  */
 export const POST: APIRoute = async ({ request }) => {
+  if (process.env.NODE_ENV === 'production' && !hasCaptcha) {
+    return json({ ok: false, reason: 'captcha_required' }, 503);
+  }
+
   // Rechaza bodies desproporcionados sin buffear megas en memoria. El tope
   // se aplica leyendo el stream, no confiando en el Content-Length.
   const text = await readBodyLimited(request, MAX_BODY_BYTES);
@@ -101,7 +105,7 @@ export const POST: APIRoute = async ({ request }) => {
 
   // Rechazamos payloads absurdamente grandes antes de iterar nada.
   const entries = Object.entries(rawVotes);
-  if (entries.length === 0 || entries.length > MAX_KEYS) {
+  if (entries.length === 0 || entries.length > MAX_COUNTRIES_PER_BATCH) {
     return json({ ok: false, reason: 'invalid_payload' }, 400);
   }
 
@@ -131,6 +135,10 @@ export const POST: APIRoute = async ({ request }) => {
   // Si el captcha está off, no se exige sesión: se vota directamente.
   let session: VoteSession | undefined;
   if (hasCaptcha) {
+    const fingerprint = captchaFingerprint(request);
+    if (!fingerprint) {
+      return json({ ok: false, reason: 'captcha_required' }, 403);
+    }
     const sessionId = readCookie(request, SESSION_COOKIE);
     if (!sessionId) {
       return json({ ok: false, reason: 'captcha_required' }, 403);
@@ -138,7 +146,7 @@ export const POST: APIRoute = async ({ request }) => {
     session = {
       key: sessionKey(sessionId),
       fingerprintKey: sessionFingerprintKey(sessionId),
-      fingerprint: captchaFingerprint(request),
+      fingerprint,
       ttl: SESSION_TTL,
     };
   }

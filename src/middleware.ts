@@ -1,4 +1,5 @@
 import { defineMiddleware } from 'astro:middleware';
+import { config } from './lib/config';
 
 /**
  * Red de seguridad a nivel de proceso + de petición.
@@ -41,6 +42,15 @@ if (!globalForGuards.__mundialProcessGuards) {
 
 export const onRequest = defineMiddleware(async (context, next) => {
   const { request } = context;
+  const { pathname } = new URL(request.url);
+
+  if (
+    config.security.originGuardSecret &&
+    pathname !== '/api/health' &&
+    request.headers.get('x-origin-guard') !== config.security.originGuardSecret
+  ) {
+    return new Response('Forbidden', { status: 403 });
+  }
 
   if (request.method === 'POST' || request.method === 'PUT') {
     const declared = Number(request.headers.get('content-length'));

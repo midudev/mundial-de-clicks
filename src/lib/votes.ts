@@ -3,6 +3,7 @@ import { buildRanking } from './ranking';
 import { config } from './config';
 import { hasDragonfly } from './features';
 import { castVotesMemory, readWorldMemory } from './memory-store';
+import { currentUtcDay, dailyVoteKey, secondsUntilNextUtcDay } from './daily-vote-limit';
 import type { RankingEntry } from './types';
 import type { RedisClientType } from 'redis';
 
@@ -16,7 +17,8 @@ import type { RedisClientType } from 'redis';
  *   cpm:{epochSecond}  INT    votos en ese segundo. Los clicks/minuto se
  *                             calculan sumando los 60 últimos segundos
  *                             (ventana deslizante) al leer el mundo.
- *   rl:{ip}:{window}   INT   ventana de rate limit por IP
+ *   rl:{ip}            HASH  token bucket por IP
+ *   daily:{ip}:{day}   INT   votos diarios contados por IP
  *
  * Optimización clave: el voto se procesa con un ÚNICO script Lua atómico
  * (rate limit + reparto + escritura). Un solo viaje de red por lote y
@@ -51,17 +53,17 @@ export interface VoteOutcome {
  * Script Lua atómico. Hace, en el servidor y de una sola vez:
  *   0. Comprueba que exista la SESIÓN de captcha, que pertenezca al mismo
  *      fingerprint y que aún tenga cuota (si no, corta con -1).
- *   1. INCRBY de la ventana de rate limit + EXPIRE.
+ *   1. Consume un token bucket por IP + EXPIRE.
  *   2. Calcula cuántos votos caben (allowed) y cuántos se bloquean.
  *   3. ZINCRBY por país (repartiendo el cupo permitido en orden).
  *   4. INCRBY de total y del bucket del segundo actual (+EXPIRE), y de
  *      bloqueados. Los clicks/minuto se derivan al leer sumando 60 buckets.
- *   5. Devuelve [accepted, blocked, remaining, code, score, code, score...]
+ *   5. Devuelve [accepted, blocked, remaining, retryAfter, code, score...]
  *      o [-1] si no hay sesión de captcha válida.
  *
- * KEYS: rl, ranking, total, cps, blocked, session, sessionFingerprint
- * ARGV: cost, maxWin, winExpire, bucketExpire, sessionTtl, requireSession,
- *       fingerprint, [code, count]...
+ * KEYS: rl, ranking, total, cps, blocked, session, sessionFingerprint, daily
+ * ARGV: cost, maxBucket, refillWindowMs, rlExpire, cpmExpire, sessionTtl,
+ *       requireSession, fingerprint, nowMs, dailyMax, dailyExpire, [code, count]...
  */
 const VOTE_SCRIPT = `
 -- 0. Si el captcha está activo (requireSession=1) exigimos una sesión
@@ -69,9 +71,9 @@ const VOTE_SCRIPT = `
 --    salta esta comprobación por completo.
 local requestedCost = tonumber(ARGV[1])
 local sessionQuota = requestedCost
-if tonumber(ARGV[6]) == 1 then
+if tonumber(ARGV[7]) == 1 then
   local storedFingerprint = redis.call('GET', KEYS[7])
-  if storedFingerprint ~= ARGV[7] then
+  if storedFingerprint ~= ARGV[8] then
     return {-1}
   end
   sessionQuota = tonumber(redis.call('GET', KEYS[6]) or '0')
@@ -82,23 +84,44 @@ end
 
 local cost = requestedCost
 if cost > sessionQuota then cost = sessionQuota end
-local maxWin = tonumber(ARGV[2])
-local winExp = tonumber(ARGV[3])
-local bucketExp = tonumber(ARGV[4])
+local maxBucket = tonumber(ARGV[2])
+local refillWindowMs = tonumber(ARGV[3])
+local rlExp = tonumber(ARGV[4])
+local bucketExp = tonumber(ARGV[5])
+local nowMs = tonumber(ARGV[9])
+local dailyMax = tonumber(ARGV[10])
+local dailyExp = tonumber(ARGV[11])
 
-local countAfter = redis.call('INCRBY', KEYS[1], cost)
-redis.call('EXPIRE', KEYS[1], winExp)
+local bucket = redis.call('HMGET', KEYS[1], 'tokens', 'updated')
+local tokens = tonumber(bucket[1])
+local updated = tonumber(bucket[2])
+if tokens == nil or updated == nil then
+  tokens = maxBucket
+  updated = nowMs
+end
 
-local freeBefore = maxWin - (countAfter - cost)
-if freeBefore < 0 then freeBefore = 0 end
+local elapsed = nowMs - updated
+if elapsed < 0 then elapsed = 0 end
+tokens = tokens + (elapsed * maxBucket / refillWindowMs)
+if tokens > maxBucket then tokens = maxBucket end
+
 local allowed = cost
-if allowed > freeBefore then allowed = freeBefore end
+local available = math.floor(tokens)
+if allowed > available then allowed = available end
+local dailyCount = tonumber(redis.call('GET', KEYS[8]) or '0')
+local dailyRemaining = dailyMax - dailyCount
+if dailyRemaining < 0 then dailyRemaining = 0 end
+if allowed > dailyRemaining then allowed = dailyRemaining end
 local blocked = requestedCost - allowed
+tokens = tokens - allowed
+
+redis.call('HSET', KEYS[1], 'tokens', tokens, 'updated', nowMs)
+redis.call('EXPIRE', KEYS[1], rlExp)
 
 local budget = allowed
 local accepted = 0
 local out = {}
-local i = 8
+local i = 12
 while i < #ARGV do
   local code = ARGV[i]
   local cnt = tonumber(ARGV[i + 1])
@@ -118,24 +141,33 @@ if accepted > 0 then
   redis.call('INCRBY', KEYS[3], accepted)
   redis.call('INCRBY', KEYS[4], accepted)
   redis.call('EXPIRE', KEYS[4], bucketExp)
+  redis.call('INCRBY', KEYS[8], accepted)
+  redis.call('EXPIRE', KEYS[8], dailyExp)
 end
 if blocked > 0 then
   redis.call('INCRBY', KEYS[5], blocked)
 end
-if tonumber(ARGV[6]) == 1 and accepted > 0 then
+if tonumber(ARGV[7]) == 1 and accepted > 0 then
   local remainingCaptcha = redis.call('DECRBY', KEYS[6], accepted)
   if remainingCaptcha <= 0 then
     redis.call('DEL', KEYS[6])
     redis.call('DEL', KEYS[7])
   else
-    redis.call('EXPIRE', KEYS[6], tonumber(ARGV[5]))
-    redis.call('EXPIRE', KEYS[7], tonumber(ARGV[5]))
+    redis.call('EXPIRE', KEYS[6], tonumber(ARGV[6]))
+    redis.call('EXPIRE', KEYS[7], tonumber(ARGV[6]))
   end
 end
 
-local remaining = maxWin - countAfter
+local remaining = math.floor(tokens)
 if remaining < 0 then remaining = 0 end
-local res = {accepted, blocked, remaining}
+local retryAfter = 0
+if blocked > 0 and tokens < 1 then
+  retryAfter = math.ceil((1 - tokens) * refillWindowMs / maxBucket)
+end
+if blocked > 0 and dailyRemaining <= 0 then
+  retryAfter = dailyExp * 1000
+end
+local res = {accepted, blocked, remaining, retryAfter}
 for _, v in ipairs(out) do res[#res + 1] = v end
 return res
 `;
@@ -216,11 +248,12 @@ export async function castVotes(
   const { maxPerWindow, windowSeconds } = config.rateLimit;
 
   const now = Date.now();
-  const window = Math.floor(now / (windowSeconds * 1000));
   const second = Math.floor(now / 1000);
+  const day = currentUtcDay(now);
+  const dailyExpire = secondsUntilNextUtcDay(now);
 
   const keys = [
-    `rl:${ip}:${window}`,
+    `rl:${ip}`,
     RANKING_KEY,
     TOTAL_KEY,
     `${CPM_PREFIX}:${second}`,
@@ -228,18 +261,23 @@ export async function castVotes(
     // Con captcha off, KEYS[6] no se toca; un placeholder es suficiente.
     session?.key ?? 'session:__none__',
     session?.fingerprintKey ?? 'session-fp:__none__',
+    dailyVoteKey(ip, day),
   ];
 
   const args = [
     String(cost),
     String(maxPerWindow),
-    String(windowSeconds + 1),
+    String(windowSeconds * 1000),
+    String(windowSeconds * 2 + 1),
     // TTL del bucket por segundo: debe cubrir toda la ventana de 60s que
     // se suma al leer, con un pequeño margen para no perder el borde.
     String(MINUTE_WINDOW + 10),
     String(session?.ttl ?? 1),
     session ? '1' : '0', // requireSession
     session?.fingerprint ?? '',
+    String(now),
+    String(config.dailyLimit.maxVotesPerIp),
+    String(dailyExpire),
   ];
   for (const [code, count] of votes) {
     args.push(code, String(count));
@@ -262,13 +300,11 @@ export async function castVotes(
   const accepted = Number(reply[0]);
   const blocked = Number(reply[1]);
   const remaining = Number(reply[2]);
+  const retryAfter = Number(reply[3]);
   const counts: Record<string, number> = {};
-  for (let i = 3; i < reply.length; i += 2) {
+  for (let i = 4; i < reply.length; i += 2) {
     counts[String(reply[i])] = Number(reply[i + 1]);
   }
-
-  const retryAfter =
-    blocked > 0 ? (window + 1) * windowSeconds * 1000 - now : 0;
 
   return { sessionValid: true, accepted, blocked, remaining, counts, retryAfter };
 }

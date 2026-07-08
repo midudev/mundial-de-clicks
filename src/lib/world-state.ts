@@ -62,6 +62,7 @@ class WorldState {
   private eventSeq = 0;
   private timer: NodeJS.Timeout | null = null;
   private polling = false;
+  private lastRefreshAt = 0;
 
   /** Arranca el bucle de sondeo (idempotente). */
   start(): void {
@@ -111,6 +112,7 @@ class WorldState {
   async refresh(): Promise<void> {
     if (this.polling) return;
     this.polling = true;
+    this.lastRefreshAt = Date.now();
     try {
       const world = await readWorld();
 
@@ -146,6 +148,12 @@ class WorldState {
     } finally {
       this.polling = false;
     }
+  }
+
+  /** Refresca solo si el último intento ya es suficientemente antiguo. */
+  async refreshIfStale(minAgeMs: number): Promise<void> {
+    if (Date.now() - this.lastRefreshAt < minAgeMs) return;
+    await this.refresh();
   }
 
   /** Envía un payload a todas las conexiones suscritas. */

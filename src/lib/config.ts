@@ -41,6 +41,14 @@ export const config = {
     /** Timeout (ms) del fetch de servidor a servidor contra el servidor Cap. */
     timeoutMs: envInt('CAP_HTTP_TIMEOUT_MS', 5000),
   },
+  security: {
+    /**
+     * Si se define, toda petición pública salvo health debe traer este valor en
+     * `x-origin-guard`. Úsalo con una Transform Rule de Cloudflare para que el
+     * origen directo no pueda suplantar cabeceras CF.
+     */
+    originGuardSecret: env('ORIGIN_GUARD_SECRET', ''),
+  },
   rateLimit: {
     /**
      * Máximo de clicks válidos por ventana y por IP. Con el default de 5 en
@@ -55,13 +63,6 @@ export const config = {
      * a ráfagas) que ventanas más largas para el mismo ritmo por segundo.
      */
     windowSeconds: envInt('RATE_LIMIT_WINDOW', 1),
-    /**
-     * Número de proxies de confianza entre el cliente y la app. Se usa
-     * para leer la IP REAL de `x-forwarded-for` sin que el cliente la
-     * pueda falsear. En Coolify hay 1 (Traefik). Si pones un CDN/WAF
-     * delante (p.ej. Cloudflare), serían 2.
-     */
-    trustedProxyHops: envInt('TRUSTED_PROXY_HOPS', 1),
   },
   captcha: {
     /**
@@ -77,9 +78,29 @@ export const config = {
      * otro reto. Evita que una cookie verificada sea barra libre durante todo
      * su TTL.
      */
-    votesPerSession: envInt('CAP_VOTES_PER_SESSION', 10),
+    votesPerSession: envInt('CAP_VOTES_PER_SESSION', 50),
     /** Duración máxima de una sesión de captcha, en segundos. */
     sessionTtlSeconds: envInt('CAP_SESSION_TTL_SECONDS', 120),
+    /** Retos Cap máximos por IP y minuto. */
+    challengeMaxPerMinute: envInt('CAP_CHALLENGE_MAX_PER_MINUTE', 6),
+    /** Canjes Cap máximos por IP y minuto. */
+    redeemMaxPerMinute: envInt('CAP_REDEEM_MAX_PER_MINUTE', 12),
+    /** Límite duro de votos que puede consumir una sesión Cap. */
+    hardVotesPerSession: envInt('CAP_SESSION_HARD_VOTE_CAP', 50),
+    /** Dificultad base del PoW de Cap. */
+    challengeDifficultyBase: envInt('CAP_CHALLENGE_DIFFICULTY_BASE', 4),
+    /** Dificultad máxima del PoW de Cap. */
+    challengeDifficultyMax: envInt('CAP_CHALLENGE_DIFFICULTY_MAX', 8),
+    /** Cada cuántos votos diarios por IP sube un punto de dificultad. */
+    challengeDifficultyStepVotes: envInt('CAP_CHALLENGE_DIFFICULTY_STEP_VOTES', 250),
+  },
+  dailyLimit: {
+    /** Votos máximos contados por IP en un día UTC. */
+    maxVotesPerIp: envInt('DAILY_VOTE_MAX_PER_IP', 2000),
+  },
+  ranking: {
+    /** Edad mínima entre lecturas forzadas por `/api/ranking`. */
+    minRefreshMs: envInt('RANKING_MIN_REFRESH_MS', 750),
   },
   stream: {
     /** Intervalo en ms entre snapshots enviados por SSE. */
@@ -89,6 +110,8 @@ export const config = {
      * agoten sockets/memoria abriendo miles de streams).
      */
     maxConnections: envInt('MAX_SSE_CONNECTIONS', 20000),
+    /** Tope de conexiones SSE por IP. */
+    maxConnectionsPerIp: envInt('MAX_SSE_CONNECTIONS_PER_IP', 4),
   },
 } as const;
 

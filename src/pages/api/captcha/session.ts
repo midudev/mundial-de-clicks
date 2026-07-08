@@ -23,7 +23,7 @@ export const GET: APIRoute = async ({ request }) => {
   let valid = !required;
   if (required) {
     try {
-      valid = await isSessionValid(id, captchaFingerprint(request));
+      valid = await isSessionValid(id, captchaFingerprint(request) ?? '');
     } catch {
       valid = false;
     }

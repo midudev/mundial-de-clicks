@@ -1,5 +1,6 @@
 import { config } from './config';
 import { buildRanking } from './ranking';
+import { incrementDailyVotesMemory, readDailyVotes } from './daily-vote-limit';
 import type { RankingEntry } from './types';
 import type { VoteOutcome } from './votes';
 
@@ -18,8 +19,8 @@ const scores = new Map<string, number>();
 let totalVotes = 0;
 let blockedClicks = 0;
 
-/** Rate limit por IP: ip -> { ventana, votos en esa ventana }. */
-const rateWindows = new Map<string, { window: number; count: number }>();
+/** Token bucket por IP: ip -> { tokens disponibles, última actualización }. */
+const rateBuckets = new Map<string, { tokens: number; updated: number }>();
 /** Clicks por segundo: epochSecond -> votos. Se suman los 60 últimos. */
 const perSecond = new Map<number, number>();
 
@@ -27,10 +28,10 @@ const perSecond = new Map<number, number>();
 const MINUTE_WINDOW = 60;
 
 /** Evita que los mapas efímeros crezcan sin límite bajo carga. */
-function prune(currentWindow: number, currentSecond: number): void {
-  if (rateWindows.size > 50_000) {
-    for (const [ip, entry] of rateWindows) {
-      if (entry.window < currentWindow) rateWindows.delete(ip);
+function prune(now: number, currentSecond: number): void {
+  if (rateBuckets.size > 50_000) {
+    for (const [ip, entry] of rateBuckets) {
+      if (now - entry.updated > 120_000) rateBuckets.delete(ip);
     }
   }
   // Conservamos la ventana completa de 60s que necesita el clicks/minuto.
@@ -40,25 +41,28 @@ function prune(currentWindow: number, currentSecond: number): void {
 }
 
 /** Procesa un lote de votos en memoria (equivalente al Lua de DragonFly). */
-export function castVotesMemory(
+export async function castVotesMemory(
   ip: string,
   votes: Map<string, number>,
   cost: number,
-): VoteOutcome {
+): Promise<VoteOutcome> {
   const { maxPerWindow, windowSeconds } = config.rateLimit;
   const now = Date.now();
-  const window = Math.floor(now / (windowSeconds * 1000));
   const second = Math.floor(now / 1000);
 
-  // --- Rate limit por IP (ventana fija) ---
-  const entry = rateWindows.get(ip);
-  const before = entry && entry.window === window ? entry.count : 0;
-  const countAfter = before + cost;
-  rateWindows.set(ip, { window, count: countAfter });
-
-  const freeBefore = Math.max(0, maxPerWindow - before);
-  const allowed = Math.min(cost, freeBefore);
+  // --- Rate limit por IP (token bucket) ---
+  const refillWindowMs = windowSeconds * 1000;
+  const entry = rateBuckets.get(ip);
+  let tokens = entry?.tokens ?? maxPerWindow;
+  const updated = entry?.updated ?? now;
+  const elapsed = Math.max(0, now - updated);
+  tokens = Math.min(maxPerWindow, tokens + (elapsed * maxPerWindow) / refillWindowMs);
+  const dailyVotes = await readDailyVotes(ip);
+  const dailyRemaining = Math.max(0, config.dailyLimit.maxVotesPerIp - dailyVotes);
+  const allowed = Math.min(cost, Math.floor(tokens), dailyRemaining);
   const blocked = cost - allowed;
+  tokens -= allowed;
+  rateBuckets.set(ip, { tokens, updated: now });
 
   // --- Reparto del cupo permitido entre los países del lote ---
   let budget = allowed;
@@ -78,14 +82,19 @@ export function castVotesMemory(
   if (accepted > 0) {
     totalVotes += accepted;
     perSecond.set(second, (perSecond.get(second) ?? 0) + accepted);
+    incrementDailyVotesMemory(ip, accepted);
   }
   if (blocked > 0) blockedClicks += blocked;
 
-  prune(window, second);
+  prune(now, second);
 
-  const remaining = Math.max(0, maxPerWindow - countAfter);
+  const remaining = Math.max(0, Math.floor(tokens));
   const retryAfter =
-    blocked > 0 ? (window + 1) * windowSeconds * 1000 - now : 0;
+    blocked > 0 && dailyRemaining <= 0
+      ? 60_000
+      : blocked > 0 && tokens < 1
+      ? Math.ceil(((1 - tokens) * refillWindowMs) / maxPerWindow)
+      : 0;
 
   // sessionValid siempre true: en modo memoria no hay captcha.
   return { sessionValid: true, accepted, blocked, remaining, counts, retryAfter };
