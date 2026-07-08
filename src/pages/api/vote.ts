@@ -16,7 +16,7 @@ import type { VoteResponse } from '../../lib/types';
 export const prerender = false;
 
 /** Máximo de votos que aceptamos en una sola petición (anti-abuso). */
-const MAX_BATCH = 100;
+const MAX_BATCH = 10;
 /** Máximo de claves distintas que miramos (nunca más que países). */
 const MAX_KEYS = COUNTRIES.length;
 /** Tamaño máximo del body en bytes (el payload real es diminuto). */
@@ -121,8 +121,11 @@ export const POST: APIRoute = async ({ request }) => {
     return json({ ok: false, reason: 'invalid_payload' }, 400);
   }
 
-  // Recorta el lote a un máximo razonable.
-  total = Math.min(total, MAX_BATCH);
+  // No recortamos payloads enormes: si alguien intenta meter una cantidad
+  // fabricada por encima del lote esperado, rechazamos todo el envío.
+  if (total > MAX_BATCH) {
+    return json({ ok: false, reason: 'invalid_payload' }, 400);
+  }
 
   // --- Captcha (solo si está activado) ------------------------------
   // Si el captcha está off, no se exige sesión: se vota directamente.

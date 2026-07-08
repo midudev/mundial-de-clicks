@@ -37,6 +37,7 @@ import { renderStatus } from './status';
 // como mucho una petición cada FLUSH_MS. Como la UI es optimista (el voto
 // se ve al instante), esta espera no se nota.
 const FLUSH_MS = 400; // duración de la ventana de agrupado
+const MAX_SEND_BATCH = 10; // debe mantenerse alineado con /api/vote
 const COMBO_WINDOW_MS = 700; // ventana para encadenar combo
 
 // Retos: en vez de un número fijo, un intervalo ALEATORIO de votos entre
@@ -90,6 +91,27 @@ function queueVote(code: string): void {
   scheduleFlush();
 }
 
+/** Extrae del acumulado un lote acotado, dejando el resto para otro envío. */
+function takePendingBatch(maxVotes: number): Map<string, number> {
+  const batch = new Map<string, number>();
+  let remaining = maxVotes;
+
+  for (const [code, count] of Array.from(pending)) {
+    if (remaining <= 0) break;
+    const take = Math.min(count, remaining);
+    batch.set(code, take);
+    remaining -= take;
+
+    if (take === count) {
+      pending.delete(code);
+    } else {
+      pending.set(code, count - take);
+    }
+  }
+
+  return batch;
+}
+
 /** true mientras hay un envío/verificación en curso (un solo lote a la vez). */
 let sending = false;
 
@@ -123,8 +145,7 @@ async function flush(): Promise<void> {
       }
     }
 
-    const batch = new Map(pending);
-    pending.clear();
+    const batch = takePendingBatch(MAX_SEND_BATCH);
 
     const res = await sendVotes(batch);
 
