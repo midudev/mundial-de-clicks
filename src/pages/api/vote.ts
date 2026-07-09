@@ -6,11 +6,12 @@ import { hasCaptcha } from '../../lib/features';
 import {
   readCookie,
   sessionKey,
-  sessionFingerprintKey,
-  captchaFingerprint,
+  sessionIpKey,
+  captchaSessionIp,
   SESSION_COOKIE,
   SESSION_TTL,
 } from '../../lib/captcha';
+import { readVoterId } from '../../lib/voter-id';
 import type { VoteResponse } from '../../lib/types';
 
 export const prerender = false;
@@ -135,8 +136,8 @@ export const POST: APIRoute = async ({ request }) => {
   // Si el captcha está off, no se exige sesión: se vota directamente.
   let session: VoteSession | undefined;
   if (hasCaptcha) {
-    const fingerprint = captchaFingerprint(request);
-    if (!fingerprint) {
+    const sessionIp = captchaSessionIp(request);
+    if (!sessionIp) {
       return json({ ok: false, reason: 'captcha_required' }, 403);
     }
     const sessionId = readCookie(request, SESSION_COOKIE);
@@ -145,17 +146,18 @@ export const POST: APIRoute = async ({ request }) => {
     }
     session = {
       key: sessionKey(sessionId),
-      fingerprintKey: sessionFingerprintKey(sessionId),
-      fingerprint,
+      ipKey: sessionIpKey(sessionId),
+      ip: sessionIp,
       ttl: SESSION_TTL,
     };
   }
 
   // --- Procesamiento atómico (sesión + rate limit + escritura) ------
   const ip = getClientIp(request);
+  const voterId = readVoterId(request);
   let outcome;
   try {
-    outcome = await castVotes(ip, votes, total, session);
+    outcome = await castVotes(ip, votes, total, session, voterId);
   } catch {
     return json({ ok: false, reason: 'error' }, 500);
   }

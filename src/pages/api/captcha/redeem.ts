@@ -3,12 +3,18 @@ import {
   proxyToCap,
   createSession,
   sessionCookie,
-  captchaFingerprint,
+  captchaSessionIp,
 } from '../../../lib/captcha';
 import { hasCaptcha } from '../../../lib/features';
 import { consumeAbuseLimit } from '../../../lib/abuse-limit';
 import { config } from '../../../lib/config';
 import { getTrustedClientIp } from '../../../lib/rate-limit';
+import {
+  createVoterId,
+  hasVoterIdSecret,
+  readVoterId,
+  voterCookie,
+} from '../../../lib/voter-id';
 
 export const prerender = false;
 
@@ -29,9 +35,12 @@ export const POST: APIRoute = async ({ request }) => {
   if (!hasCaptcha) {
     return json({ success: false, error: 'captcha_disabled' }, 404);
   }
+  if (!hasVoterIdSecret()) {
+    return json({ success: false, error: 'voter_id_secret_missing' }, 503);
+  }
 
-  const fingerprint = captchaFingerprint(request);
-  if (!fingerprint) {
+  const sessionIp = captchaSessionIp(request);
+  if (!sessionIp) {
     return json({ success: false, error: 'trusted_ip_required' }, 403);
   }
   const ip = getTrustedClientIp(request);
@@ -86,15 +95,19 @@ export const POST: APIRoute = async ({ request }) => {
   // Cookie SIN `Secure`: la app se sirve por http:// (sslip.io sin TLS) y los
   // navegadores descartan cookies Secure sobre HTTP. Si algún día se sirve por
   // HTTPS, se puede volver a poner `import.meta.env.PROD`.
-  const id = await createSession(fingerprint);
+  const id = await createSession(sessionIp);
   const cookie = sessionCookie(id, false);
+  const voterId = readVoterId(request) ?? createVoterId();
+  const voter = voterCookie(voterId, false);
+  const headers = new Headers({
+    'content-type': 'application/json',
+    'cache-control': 'no-store',
+  });
+  headers.append('set-cookie', cookie);
+  headers.append('set-cookie', voter);
 
   return new Response(JSON.stringify(data), {
     status: 200,
-    headers: {
-      'content-type': 'application/json',
-      'cache-control': 'no-store',
-      'set-cookie': cookie,
-    },
+    headers,
   });
 };

@@ -131,12 +131,17 @@ servicio (p.ej. `dragonfly`).
 | `MAX_SSE_CONNECTIONS_PER_IP` | `4`         | No          |
 | `RANKING_MIN_REFRESH_MS` | `750`            | No          |
 | `ORIGIN_GUARD_SECRET` | `secreto-largo`     | Recomendada |
+| `VOTER_ID_SECRET` | `otro-secreto-largo` | Recomendada |
 
 En producción, la sesión Cap y el rate limit se atan a `CF-Connecting-IP`.
 El origen debe aceptar tráfico solo desde Cloudflare y el proxy debe reenviar
 esa cabecera; `X-Forwarded-For` no se usa como fuente de IP fiable. Si defines
 `ORIGIN_GUARD_SECRET`, configura Cloudflare para añadir `x-origin-guard` con
 ese valor en las peticiones al origen.
+
+La cookie persistente `voter_id` se firma con `VOTER_ID_SECRET` (o, como
+fallback, `ORIGIN_GUARD_SECRET`). Mantén ese valor estable entre despliegues
+para que el límite diario por navegador no se reinicie.
 
 ### 3. Umami (analytics)
 

@@ -22,7 +22,7 @@ export function getClientIp(request: Request, fallback = '0.0.0.0'): string {
 
   // Solo para desarrollo local sin Cloudflare. En producción no usamos XFF:
   // una cabecera enviada por el cliente no puede participar en rate limit ni
-  // en fingerprints de captcha.
+  // en la IP de origen de una cap_session.
   if (process.env.NODE_ENV !== 'production') {
     return sanitizeIp(request.headers.get('x-real-ip')?.trim() ?? '', fallback);
   }

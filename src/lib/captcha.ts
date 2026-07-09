@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { getRedis, withTimeout } from './redis';
 import { config } from './config';
 import { getTrustedClientIp } from './rate-limit';
@@ -14,15 +14,15 @@ import { getTrustedClientIp } from './rate-limit';
  *      nuestro mismo origen (HTTPS, sin CORS ni mixed-content) y el tráfico
  *      hacia Cap sale de servidor a servidor.
  *   2. Si Cap valida el PoW, creamos una SESIÓN (en DragonFly, con TTL) y la
- *      devolvemos como cookie. La API de votos exige esa sesión, la ata al
- *      mismo fingerprint y consume una cuota corta de votos.
+ *      devolvemos como cookie. La API de votos exige esa sesión, la ata a la
+ *      primera IP fiable que la creó y consume una cuota corta de votos.
  *
  * Si `CAP_API_URL` no está definida, el captcha queda desactivado (ver
  * `hasCaptcha` en features.ts) y se vota sin él.
  */
 
 export const SESSION_PREFIX = 'cap:sess:';
-export const SESSION_FINGERPRINT_PREFIX = 'cap:sess-fp:';
+export const SESSION_IP_PREFIX = 'cap:sess-ip:';
 
 /**
  * Cookie de sesión y su duración. Ventana CORTA (2 min) que se RENUEVA en
@@ -70,27 +70,21 @@ export async function proxyToCap(
   return { status: res.status, data };
 }
 
-/**
- * Fingerprint estable para atar la sesión al cliente que resolvió el reto.
- * En producción usa solo CF-Connecting-IP; nunca X-Forwarded-For.
- */
-export function captchaFingerprint(request: Request): string | null {
-  const ip = getTrustedClientIp(request);
-  if (!ip) return null;
-  const userAgent = request.headers.get('user-agent') ?? '';
-  return createHash('sha256').update(`${ip}\n${userAgent}`).digest('hex');
+/** IP fiable que ata una cap_session a su origen. Nunca usa X-Forwarded-For. */
+export function captchaSessionIp(request: Request): string | null {
+  return getTrustedClientIp(request);
 }
 
 /** Crea una sesión verificada en DragonFly y devuelve su id. */
-export async function createSession(fingerprint: string): Promise<string> {
+export async function createSession(ip: string): Promise<string> {
   const redis = await getRedis();
   const id = randomUUID();
   const sessionKey = SESSION_PREFIX + id;
-  const fingerprintKey = SESSION_FINGERPRINT_PREFIX + id;
+  const ipKey = SESSION_IP_PREFIX + id;
   const multi = redis
     .multi()
     .set(sessionKey, String(SESSION_VOTE_QUOTA), { EX: SESSION_TTL })
-    .set(fingerprintKey, fingerprint, { EX: SESSION_TTL });
+    .set(ipKey, ip, { EX: SESSION_TTL });
   await withTimeout(
     multi.exec(),
     config.redis.commandTimeoutMs,
@@ -104,27 +98,24 @@ export function sessionKey(id: string): string {
   return SESSION_PREFIX + id;
 }
 
-/** Clave de fingerprint de una sesión (para el script de votos). */
-export function sessionFingerprintKey(id: string): string {
-  return SESSION_FINGERPRINT_PREFIX + id;
+/** Clave de la IP original de una sesión (para el script de votos). */
+export function sessionIpKey(id: string): string {
+  return SESSION_IP_PREFIX + id;
 }
 
 /** Comprueba si una sesión sigue viva. */
 export async function isSessionValid(
   id: string,
-  fingerprint = '',
+  ip = '',
 ): Promise<boolean> {
-  if (!id || !fingerprint) return false;
+  if (!id || !ip) return false;
   const redis = await getRedis();
-  const [remaining, storedFingerprint] = await withTimeout(
-    redis.mGet([SESSION_PREFIX + id, SESSION_FINGERPRINT_PREFIX + id]),
+  const [remaining, storedIp] = await withTimeout(
+    redis.mGet([SESSION_PREFIX + id, SESSION_IP_PREFIX + id]),
     config.redis.commandTimeoutMs,
     'captcha/isSessionValid',
   );
-  return (
-    storedFingerprint === fingerprint &&
-    Number.parseInt(remaining ?? '0', 10) > 0
-  );
+  return storedIp === ip && Number.parseInt(remaining ?? '0', 10) > 0;
 }
 
 /** Lee una cookie del header `cookie` de una petición. */

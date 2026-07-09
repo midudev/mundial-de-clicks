@@ -3,7 +3,7 @@ import {
   readCookie,
   isSessionValid,
   SESSION_COOKIE,
-  captchaFingerprint,
+  captchaSessionIp,
 } from '../../../lib/captcha';
 import { hasCaptcha } from '../../../lib/features';
 
@@ -23,7 +23,7 @@ export const GET: APIRoute = async ({ request }) => {
   let valid = !required;
   if (required) {
     try {
-      valid = await isSessionValid(id, captchaFingerprint(request) ?? '');
+      valid = await isSessionValid(id, captchaSessionIp(request) ?? '');
     } catch {
       valid = false;
     }

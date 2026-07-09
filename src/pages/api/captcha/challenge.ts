@@ -4,7 +4,8 @@ import { hasCaptcha } from '../../../lib/features';
 import { getTrustedClientIp } from '../../../lib/rate-limit';
 import { consumeAbuseLimit } from '../../../lib/abuse-limit';
 import { config } from '../../../lib/config';
-import { readDailyVotes } from '../../../lib/daily-vote-limit';
+import { readDailyVotesMax } from '../../../lib/daily-vote-limit';
+import { readVoterId } from '../../../lib/voter-id';
 
 export const prerender = false;
 
@@ -59,7 +60,10 @@ export const POST: APIRoute = async ({ request }) => {
 
   let dailyVotes = 0;
   try {
-    dailyVotes = await readDailyVotes(ip);
+    dailyVotes = await readDailyVotesMax([
+      ['ip', ip],
+      ['voter', readVoterId(request)],
+    ]);
   } catch {
     return json({ error: 'daily_limit_unavailable' }, 503);
   }

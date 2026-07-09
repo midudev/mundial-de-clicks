@@ -18,7 +18,8 @@ import type { RedisClientType } from 'redis';
  *                             calculan sumando los 60 últimos segundos
  *                             (ventana deslizante) al leer el mundo.
  *   rl:{ip}            HASH  token bucket por IP
- *   daily:{ip}:{day}   INT   votos diarios contados por IP
+ *   daily:ip:*         INT   votos diarios contados por IP
+ *   daily:voter:*      INT   votos diarios contados por voter_id
  *
  * Optimización clave: el voto se procesa con un ÚNICO script Lua atómico
  * (rate limit + reparto + escritura). Un solo viaje de red por lote y
@@ -51,8 +52,8 @@ export interface VoteOutcome {
 
 /**
  * Script Lua atómico. Hace, en el servidor y de una sola vez:
- *   0. Comprueba que exista la SESIÓN de captcha, que pertenezca al mismo
- *      fingerprint y que aún tenga cuota (si no, corta con -1).
+ *   0. Comprueba que exista la SESIÓN de captcha, que pertenezca a la misma
+ *      IP fiable con la que se creó y que aún tenga cuota (si no, corta con -1).
  *   1. Consume un token bucket por IP + EXPIRE.
  *   2. Calcula cuántos votos caben (allowed) y cuántos se bloquean.
  *   3. ZINCRBY por país (repartiendo el cupo permitido en orden).
@@ -61,9 +62,11 @@ export interface VoteOutcome {
  *   5. Devuelve [accepted, blocked, remaining, retryAfter, code, score...]
  *      o [-1] si no hay sesión de captcha válida.
  *
- * KEYS: rl, ranking, total, cps, blocked, session, sessionFingerprint, daily
+ * KEYS: rl, ranking, total, cps, blocked, session, sessionIp,
+ *       dailyIp, dailyVoter
  * ARGV: cost, maxBucket, refillWindowMs, rlExpire, cpmExpire, sessionTtl,
- *       requireSession, fingerprint, nowMs, dailyMax, dailyExpire, [code, count]...
+ *       requireSession, sessionIp, nowMs, dailyMax, dailyExpire, hasVoter,
+ *       [code, count]...
  */
 const VOTE_SCRIPT = `
 -- 0. Si el captcha está activo (requireSession=1) exigimos una sesión
@@ -72,8 +75,8 @@ const VOTE_SCRIPT = `
 local requestedCost = tonumber(ARGV[1])
 local sessionQuota = requestedCost
 if tonumber(ARGV[7]) == 1 then
-  local storedFingerprint = redis.call('GET', KEYS[7])
-  if storedFingerprint ~= ARGV[8] then
+  local storedSessionIp = redis.call('GET', KEYS[7])
+  if storedSessionIp ~= ARGV[8] then
     return {-1}
   end
   sessionQuota = tonumber(redis.call('GET', KEYS[6]) or '0')
@@ -91,6 +94,7 @@ local bucketExp = tonumber(ARGV[5])
 local nowMs = tonumber(ARGV[9])
 local dailyMax = tonumber(ARGV[10])
 local dailyExp = tonumber(ARGV[11])
+local hasVoter = tonumber(ARGV[12])
 
 local bucket = redis.call('HMGET', KEYS[1], 'tokens', 'updated')
 local tokens = tonumber(bucket[1])
@@ -108,7 +112,13 @@ if tokens > maxBucket then tokens = maxBucket end
 local allowed = cost
 local available = math.floor(tokens)
 if allowed > available then allowed = available end
-local dailyCount = tonumber(redis.call('GET', KEYS[8]) or '0')
+local dailyIpCount = tonumber(redis.call('GET', KEYS[8]) or '0')
+local dailyVoterCount = 0
+if hasVoter == 1 then
+  dailyVoterCount = tonumber(redis.call('GET', KEYS[9]) or '0')
+end
+local dailyCount = dailyIpCount
+if dailyVoterCount > dailyCount then dailyCount = dailyVoterCount end
 local dailyRemaining = dailyMax - dailyCount
 if dailyRemaining < 0 then dailyRemaining = 0 end
 if allowed > dailyRemaining then allowed = dailyRemaining end
@@ -121,7 +131,7 @@ redis.call('EXPIRE', KEYS[1], rlExp)
 local budget = allowed
 local accepted = 0
 local out = {}
-local i = 12
+local i = 13
 while i < #ARGV do
   local code = ARGV[i]
   local cnt = tonumber(ARGV[i + 1])
@@ -143,6 +153,10 @@ if accepted > 0 then
   redis.call('EXPIRE', KEYS[4], bucketExp)
   redis.call('INCRBY', KEYS[8], accepted)
   redis.call('EXPIRE', KEYS[8], dailyExp)
+  if hasVoter == 1 then
+    redis.call('INCRBY', KEYS[9], accepted)
+    redis.call('EXPIRE', KEYS[9], dailyExp)
+  end
 end
 if blocked > 0 then
   redis.call('INCRBY', KEYS[5], blocked)
@@ -217,10 +231,10 @@ async function runVoteScript(
 export interface VoteSession {
   /** Clave de DragonFly de la sesión. */
   key: string;
-  /** Clave con el fingerprint que creó la sesión. */
-  fingerprintKey: string;
-  /** Fingerprint calculado para la petición actual. */
-  fingerprint: string;
+  /** Clave con la IP fiable que creó la sesión. */
+  ipKey: string;
+  /** IP fiable calculada para la petición actual. */
+  ip: string;
   /** TTL a renovar en cada voto (segundos). */
   ttl: number;
 }
@@ -239,9 +253,10 @@ export async function castVotes(
   votes: Map<string, number>,
   cost: number,
   session?: VoteSession,
+  voterId?: string | null,
 ): Promise<VoteOutcome> {
   if (!hasDragonfly) {
-    return castVotesMemory(ip, votes, cost);
+    return castVotesMemory(ip, votes, cost, voterId);
   }
 
   const redis = await getRedis();
@@ -260,8 +275,9 @@ export async function castVotes(
     BLOCKED_KEY,
     // Con captcha off, KEYS[6] no se toca; un placeholder es suficiente.
     session?.key ?? 'session:__none__',
-    session?.fingerprintKey ?? 'session-fp:__none__',
-    dailyVoteKey(ip, day),
+    session?.ipKey ?? 'session-ip:__none__',
+    dailyVoteKey('ip', ip, day),
+    voterId ? dailyVoteKey('voter', voterId, day) : 'daily:voter:__none__',
   ];
 
   const args = [
@@ -274,10 +290,11 @@ export async function castVotes(
     String(MINUTE_WINDOW + 10),
     String(session?.ttl ?? 1),
     session ? '1' : '0', // requireSession
-    session?.fingerprint ?? '',
+    session?.ip ?? '',
     String(now),
     String(config.dailyLimit.maxVotesPerIp),
     String(dailyExpire),
+    voterId ? '1' : '0',
   ];
   for (const [code, count] of votes) {
     args.push(code, String(count));

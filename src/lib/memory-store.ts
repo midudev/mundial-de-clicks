@@ -1,6 +1,6 @@
 import { config } from './config';
 import { buildRanking } from './ranking';
-import { incrementDailyVotesMemory, readDailyVotes } from './daily-vote-limit';
+import { incrementDailyVotesMemory, readDailyVotesMax } from './daily-vote-limit';
 import type { RankingEntry } from './types';
 import type { VoteOutcome } from './votes';
 
@@ -45,6 +45,7 @@ export async function castVotesMemory(
   ip: string,
   votes: Map<string, number>,
   cost: number,
+  voterId?: string | null,
 ): Promise<VoteOutcome> {
   const { maxPerWindow, windowSeconds } = config.rateLimit;
   const now = Date.now();
@@ -57,7 +58,10 @@ export async function castVotesMemory(
   const updated = entry?.updated ?? now;
   const elapsed = Math.max(0, now - updated);
   tokens = Math.min(maxPerWindow, tokens + (elapsed * maxPerWindow) / refillWindowMs);
-  const dailyVotes = await readDailyVotes(ip);
+  const dailyVotes = await readDailyVotesMax([
+    ['ip', ip],
+    ['voter', voterId ?? null],
+  ]);
   const dailyRemaining = Math.max(0, config.dailyLimit.maxVotesPerIp - dailyVotes);
   const allowed = Math.min(cost, Math.floor(tokens), dailyRemaining);
   const blocked = cost - allowed;
@@ -82,7 +86,13 @@ export async function castVotesMemory(
   if (accepted > 0) {
     totalVotes += accepted;
     perSecond.set(second, (perSecond.get(second) ?? 0) + accepted);
-    incrementDailyVotesMemory(ip, accepted);
+    incrementDailyVotesMemory(
+      [
+        ['ip', ip],
+        ['voter', voterId ?? null],
+      ],
+      accepted,
+    );
   }
   if (blocked > 0) blockedClicks += blocked;
 

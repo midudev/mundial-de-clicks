@@ -48,6 +48,8 @@ export const config = {
      * origen directo no pueda suplantar cabeceras CF.
      */
     originGuardSecret: env('ORIGIN_GUARD_SECRET', ''),
+    /** Secreto HMAC para firmar la cookie persistente de votante. */
+    voterIdSecret: env('VOTER_ID_SECRET', ''),
   },
   rateLimit: {
     /**
