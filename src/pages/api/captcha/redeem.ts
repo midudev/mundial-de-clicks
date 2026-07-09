@@ -1,4 +1,5 @@
 import type { APIRoute } from 'astro';
+import { readJsonLimited } from '../../../lib/body';
 import {
   proxyToCap,
   createSession,
@@ -17,6 +18,9 @@ import {
 } from '../../../lib/voter-id';
 
 export const prerender = false;
+
+/** Tope de body del canje: el payload de Cap (token + solución) es diminuto. */
+const MAX_REDEEM_BODY_BYTES = 4_096;
 
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {
@@ -69,10 +73,12 @@ export const POST: APIRoute = async ({ request }) => {
     return json({ success: false, error: 'rate_limit_unavailable' }, 503);
   }
 
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
+  // Tope DURO de body: el payload de canje de Cap (token + solución) es
+  // diminuto. Leemos por stream para que un `Transfer-Encoding: chunked` sin
+  // `Content-Length` no pueda forzar buffering ilimitado (DoS de memoria); el
+  // guard global del middleware solo mira el Content-Length declarado.
+  const body = await readJsonLimited(request, MAX_REDEEM_BODY_BYTES);
+  if (body === null) {
     return json({ success: false, message: 'invalid_body' }, 400);
   }
 
