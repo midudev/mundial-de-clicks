@@ -1,4 +1,5 @@
 import type { APIRoute } from 'astro';
+import { readBodyLimited } from '../../lib/body';
 import { getClientIp } from '../../lib/rate-limit';
 import { castVotes, type VoteSession } from '../../lib/votes';
 import { isValidCountry } from '../../lib/countries';
@@ -28,51 +29,6 @@ function json(body: VoteResponse, status: number): Response {
     status,
     headers: { 'content-type': 'application/json' },
   });
-}
-
-/**
- * Lee el cuerpo como texto con un tope DURO de bytes.
- *
- * Defensa contra DoS de memoria: NO nos fiamos del `Content-Length` (se
- * puede mentir u omitir con `Transfer-Encoding: chunked`). Contamos los
- * bytes según llegan y abortamos el stream en cuanto se pasa, así nunca
- * buffeamos megas en memoria. Devuelve `null` si excede el límite.
- */
-async function readBodyLimited(
-  request: Request,
-  maxBytes: number,
-): Promise<string | null> {
-  if (!request.body) {
-    const text = await request.text();
-    return Buffer.byteLength(text) > maxBytes ? null : text;
-  }
-
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!value) continue;
-      total += value.byteLength;
-      if (total > maxBytes) {
-        await reader.cancel().catch(() => {});
-        return null;
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock?.();
-  }
-
-  const buf = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    buf.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return new TextDecoder().decode(buf);
 }
 
 /**

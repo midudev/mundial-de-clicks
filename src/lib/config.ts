@@ -77,10 +77,11 @@ export const config = {
     apiUrl: env('CAP_API_URL', '').replace(/\/+$/, ''),
     /**
      * Cuántos votos acepta una sesión de captcha antes de obligar a resolver
-     * otro reto. Evita que una cookie verificada sea barra libre durante todo
-     * su TTL.
+     * otro reto. Cuanto más bajo, más caro le sale a una botnet cada voto (más
+     * PoW por voto) y menos vale una cookie robada. Default conservador: 10.
+     * `CAP_SESSION_HARD_VOTE_CAP` es el techo absoluto por si se sube por env.
      */
-    votesPerSession: envInt('CAP_VOTES_PER_SESSION', 50),
+    votesPerSession: envInt('CAP_VOTES_PER_SESSION', 10),
     /** Duración máxima de una sesión de captcha, en segundos. */
     sessionTtlSeconds: envInt('CAP_SESSION_TTL_SECONDS', 120),
     /** Retos Cap máximos por IP y minuto. */

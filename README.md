@@ -118,7 +118,7 @@ servicio (p.ej. `dragonfly`).
 | `PORT`         | `4321`                      | Recomendada |
 | `RATE_LIMIT_MAX` | `5`                       | No          |
 | `RATE_LIMIT_WINDOW` | `1`                    | No          |
-| `CAP_VOTES_PER_SESSION` | `50`             | No          |
+| `CAP_VOTES_PER_SESSION` | `10`             | No          |
 | `CAP_SESSION_HARD_VOTE_CAP` | `50`          | No          |
 | `CAP_SESSION_TTL_SECONDS` | `120`          | No          |
 | `CAP_CHALLENGE_MAX_PER_MINUTE` | `6`       | No          |
@@ -130,14 +130,24 @@ servicio (p.ej. `dragonfly`).
 | `STREAM_INTERVAL_MS` | `1000`                | No          |
 | `MAX_SSE_CONNECTIONS_PER_IP` | `4`         | No          |
 | `RANKING_MIN_REFRESH_MS` | `750`            | No          |
-| `ORIGIN_GUARD_SECRET` | `secreto-largo`     | Recomendada |
+| `ORIGIN_GUARD_SECRET` | `secreto-largo`     | ✅ Sí en prod |
 | `VOTER_ID_SECRET` | `otro-secreto-largo` | Recomendada |
 
-En producción, la sesión Cap y el rate limit se atan a `CF-Connecting-IP`.
-El origen debe aceptar tráfico solo desde Cloudflare y el proxy debe reenviar
-esa cabecera; `X-Forwarded-For` no se usa como fuente de IP fiable. Si defines
-`ORIGIN_GUARD_SECRET`, configura Cloudflare para añadir `x-origin-guard` con
-ese valor en las peticiones al origen.
+En producción, la sesión Cap, el rate limit y el cap diario se atan a
+`CF-Connecting-IP`. Esa cabecera la pone el edge de Cloudflare, pero solo es
+fiable si el origen NO es alcanzable directamente: si alguien llega al origen
+sin pasar por Cloudflare, puede falsear `CF-Connecting-IP` y saltarse todo el
+anti-abuso a la vez (rate limit, cap diario e IP de la cap_session).
+
+Por eso `ORIGIN_GUARD_SECRET` es **obligatoria en producción**: configura una
+Transform Rule en Cloudflare que añada el header `x-origin-guard` con ese valor
+a las peticiones al origen. El middleware exige ese header en toda ruta (salvo
+`/api/health`), lo que certifica que el tráfico pasó por Cloudflare. Si en
+producción el secreto NO está configurado, las rutas cuya integridad depende de
+la IP (`/api/vote` y `/api/captcha/*`) se bloquean con `503` (fail-closed) en
+vez de servirse con una IP spoofeable; las lecturas (ranking/SSE) siguen. Como
+defensa en profundidad, restringe además el ingress del origen a las IPs de
+Cloudflare en el proxy/WAF. `X-Forwarded-For` nunca se usa como fuente de IP.
 
 La cookie persistente `voter_id` se firma con `VOTER_ID_SECRET` (o, como
 fallback, `ORIGIN_GUARD_SECRET`). Mantén ese valor estable entre despliegues
