@@ -16,7 +16,6 @@
   },
   "dependencies": {
     "@astrojs/node": "^11.0.2",
-    "@cap.js/server": "^4.0.5",
     "@cap.js/wasm": "0.0.7",
     "@cap.js/widget": "^0.1.56",
     "@tailwindcss/vite": "^4.3.2",
